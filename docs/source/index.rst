@@ -6,7 +6,7 @@
 Welcome to eWaterCycle-DataAssimilation's documentation!
 ========================================================
 
-**eWaterCycle-DA** is a python package which adds data assimilation functionality to the `eWaterCycle <https://ewatercycle.nl/>` platform
+**eWaterCycle-DA** is a python package which adds data assimilation functionality to the `eWaterCycle <https://ewatercycle.nl/>`_ platform
 
 
 .. toctree::

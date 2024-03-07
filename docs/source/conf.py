@@ -13,11 +13,15 @@ author = 'David Haasnoot'
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
 
-extensions = []
+extensions = [
+                'sphinx.ext.autodoc',
+                "nbsphinx",
+            ]
 
 templates_path = ['_templates']
 exclude_patterns = []
 
+source_suffix = [".rst"]
 
 
 # -- Options for HTML output -------------------------------------------------
@@ -25,3 +29,9 @@ exclude_patterns = []
 
 html_theme = 'alabaster'
 html_static_path = ['_static']
+
+
+# -- Use autoapi.extension to run sphinx-apidoc -------
+autoapi_dirs = ["../../src"]
+autoapi_python_class_content = "both"
+autoapi_options = ["members", "undoc-members", "imported-members", "show-inheritance"]

@@ -16,22 +16,36 @@ author = 'David Haasnoot'
 extensions = [
                 'sphinx.ext.autodoc',
                 "nbsphinx",
+                "autoapi.extension",
             ]
 
 templates_path = ['_templates']
-exclude_patterns = []
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "**.ipynb_checkpoints"]
 
 source_suffix = [".rst"]
 
+html_sidebars = {
+    "**": [
+        "relations.html",  # needs 'show_related': True theme option to display
+        "searchbox.html",
+    ]
+}
+
+# Hacky way to 'remove' the cell count from the prompt.
+# Inspired by https://github.com/spatialaudio/nbsphinx/issues/126
+nbsphinx_prompt_width = "0"
+nbsphinx_input_prompt = "%s         In:"
+nbsphinx_output_prompt = "%s       Out:"
 
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
-html_theme = 'alabaster'
+
+html_theme = 'sphinx_rtd_theme'
 html_static_path = ['_static']
 
 
 # -- Use autoapi.extension to run sphinx-apidoc -------
-autoapi_dirs = ["../../src"]
+autoapi_dirs = ["../src"]
 autoapi_python_class_content = "both"
 autoapi_options = ["members", "undoc-members", "imported-members", "show-inheritance"]

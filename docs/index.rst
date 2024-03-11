@@ -6,18 +6,14 @@
 Welcome to eWaterCycle-DataAssimilation's documentation!
 ========================================================
 
-**eWaterCycle-DA** is a python package which adds data assimilation functionality to the `eWaterCycle <https://ewatercycle.nl/>`_ platform
+**eWaterCycle-DA** is a python package which adds data assimilation functionality to the `eWaterCycle <https://ewatercycle.nl/>`_ platform.
+
+More info to be added...
 
 
 .. toctree::
    :maxdepth: 2
    :caption: Contents:
+             
+   example_HBV_model
 
-
-
-Indices and tables
-==================
-
-* :ref:`genindex`
-* :ref:`modindex`
-* :ref:`search`

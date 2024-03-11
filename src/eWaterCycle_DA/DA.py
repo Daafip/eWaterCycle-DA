@@ -52,6 +52,8 @@ class Ensemble(BaseModel):
             setup_kwargs (:obj:`dict` | :obj:`list`): kwargs dictionary which can be passed as `model.setup(**setup_kwargs)`.
                 UserWarning: Ensure your model saves all kwargs to the config
                 Should you want to vary initial parameters, again all should be a list
+        Note:
+
         """
         # same for all members (to start with)
         if type(model_name) == str:

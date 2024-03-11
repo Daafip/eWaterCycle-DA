@@ -19,10 +19,10 @@ loaded_models: dict[str, Any] = {"HBV": ewatercycle.models.HBV}
 class Ensemble(BaseModel):
     """Class for running data assimilation in eWaterCycle
 
-    Attributes:
-        N: number of ensemble members
-        location: Where the model is run, by default local - change to remote later
-        ensemble: list of ensembleMembers
+        :param [int] N: Number of ensemble members
+        :param [str] location: Where the model is run, by default local - change to remote later
+        :param [list] ensemble_list: list containing ensembleMembers
+
     """
 
     N: int
@@ -39,18 +39,20 @@ class Ensemble(BaseModel):
             self.ensemble_list.append(EnsembleMember())
 
     def initialize(self, model_name, forcing, setup_kwargs) -> None:
-        """"Takes empty Ensemble members and launches the model for given ensemble member
-        Args:
-            model_name: str | list: just takes the model string name for now, change to more formal config file later?
-                               Should you pass a list here, you also need a list of forcing objects & vice versa.
+        """Takes empty Ensemble members and launches the model for given ensemble member
 
-            forcing: ewatercycle.base.forcing | list: object or list of objects to give to the model.
-                                                      Should you want to vary the forcing, you also need to pass a list
-                                                      of models.
+        :param [str | list] model_name:
+            just takes the model string name for now, change to more formal config file later?
+            Should you pass a list here, you also need a list of forcing objects & vice versa.
 
-            setup_kwargs: dict | list: kwargs dictionary which can be passed as `model.setup(**setup_kwargs)`.
-                        UserWarning: Ensure your model saves all kwargs to the config
-                        Should you want to vary initial parameters, again all should be a list
+        :param [ewatercycle.base.forcing | list] forcing:
+            object or list of objects to give to the model.
+            Should you want to vary the forcing, you also need to pass a list of models.
+
+         :param [dict | list] setup_kwargs:
+            kwargs dictionary which can be passed as `model.setup(**setup_kwargs)`.
+            UserWarning: Ensure your model saves all kwargs to the config
+            Should you want to vary initial parameters, again all should be a list
         """
         # same for all members (to start with)
         if type(model_name) == str:
@@ -84,18 +86,42 @@ class Ensemble(BaseModel):
             ensemble_member.update()
 
     def get_value(self, var_name: str) -> np.ndarray:
+        """Gets current value of whole ensemble"""
         output_array = np.zeros(self.N)
         for i, ensemble_member in enumerate(self.ensemble_list):
             output_array[i] = ensemble_member.model.get_value(var_name)[0]
         return output_array
 
     def set_value(self, var_name: str, src: np.ndarray) -> None:
+        """Sets current value of whole ensemble"""
         for i, ensemble_member in enumerate(self.ensemble_list):
             ensemble_member.model.set_value(var_name, src[i])
 
 
 class EnsembleMember(BaseModel):
-    """Class containing ensemble members, meant to be called by the DA.Ensemble class"""
+    """Class containing ensemble members, meant to be called by the DA.Ensemble class
+
+    :param [str | list] model_name:
+        just takes the model string name for now, change to more formal config file later?
+        Should you pass a list here, you also need a list of forcing objects & vice versa.
+
+    :param [ewatercycle.base.forcing | list] forcing:
+        object or list of objects to give to the model.
+        Should you want to vary the forcing, you also need to pass a list of models.
+
+    :param [dict | list] setup_kwargs:
+        kwargs dictionary which can be passed as `model.setup(**setup_kwargs)`.
+        UserWarning: Ensure your model saves all kwargs to the config
+        Should you want to vary initial parameters, again all should be a list
+
+    :param [ewatercycle.base.model] model:
+        instance of eWaterCycle model to be used. Must be defined in ``loaded_models`` dictionary in this file
+        which is a safeguard against misuse.
+
+    :param [Path] config:
+        path to config file: **to be added later.**
+
+    """
 
     model_name: str | None = None
     forcing: DefaultForcing | None = None

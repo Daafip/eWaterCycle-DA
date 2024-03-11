@@ -22,6 +22,9 @@ extensions = [
 templates_path = ['_templates']
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "**.ipynb_checkpoints"]
 
+# The name of the Pygments (syntax highlighting) style to use.
+pygments_style = "sphinx"
+
 source_suffix = [".rst"]
 
 html_sidebars = {

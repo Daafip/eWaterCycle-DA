@@ -188,7 +188,7 @@ class Ensemble(BaseModel):
             Note:
                 Be specific when these are used to only occur when wanted
 
-            *PF & HBV*:
+            *#1: PF & HBV*:
                 Particle filters replace the full particle: thus the lag function also needs to be copied.
 
                 If only HBV models are implemented with PF this will be updates
@@ -200,7 +200,7 @@ class Ensemble(BaseModel):
 
         """
 
-        #
+        #1
         if self.ensemble_method_name == "PF":
             # in particle filter the whole particle needs to be copied
             # when dealing with lag this is difficult as we don't want it in the regular state vector
@@ -221,7 +221,7 @@ class Ensemble(BaseModel):
                 # TODO consider adding noise ?
                 new_lag_vector_lst = lag_vector_arr[self.ensemble_method.resample_indices]
 
-                for index, ensembleMember in enumerate(ensemble.ensemble_list):
+                for index, ensembleMember in enumerate(self.ensemble_list):
                     new_t_lag = ensembleMember.get_value(f"Tlag")
                     [ensembleMember.set_value(f"memory_vector{mem_index}", np.array([new_lag_vector_lst[index, mem_index]])) for mem_index in range(int(new_t_lag))]
 
@@ -231,6 +231,8 @@ class Ensemble(BaseModel):
                               category=RuntimeWarning)
             else:
                 warnings.warn(f"Not running `config_specific_actions`",category=UserWarning)
+
+        #2...
 
     def get_value(self, var_name: str) -> np.ndarray:
         """Gets current value of whole ensemble for given variable"""
@@ -404,8 +406,7 @@ class ParticleFilter(BaseModel):
         Currently assumed 1D grid.
 
     Args:
-        hyperparameters (dict): Combination of many different parameters;
-
+        hyperparameters (dict): Combination of many different parameters:
                                 like_sigma_weights (float): scale/sigma of logpdf when generating particle weights
 
                                 like_sigma_state_vector (float): scale/sigma of noise added to each value in state vector
@@ -450,10 +451,13 @@ class ParticleFilter(BaseModel):
         # for now just constant perturbation, can vary this hyperparameter
         like_sigma = self.hyperparameters['like_sigma_state_vector']
         for index, row in enumerate(new_state_vectors_transpose):
-            row_with_noise = np.array([s + add_normal_noise(like_sigma) for s in row])
+            row_with_noise = np.array([s + add_normal_noise(like_sigma)for s in row])
             new_state_vectors_transpose[index] = row_with_noise
 
         self.new_state_vectors = new_state_vectors_transpose.T # back to N x len(z) to be set correctly
+
+        # check for negative values
+        self.new_state_vectors[self.new_state_vectors < 0] = 1e-6
 
 
     def generate_weights(self):
@@ -478,11 +482,10 @@ class EnsembleKalmanFilter(BaseModel):
         Currently assumed 1D grid.
 
     Args:
-        hyperparameters (dict): Combination of many different parameters;
+        hyperparameters (dict): Combination of many different parameters:
+                                like_sigma_weights (float): scale/sigma of logpdf when generating particle weights
 
-            like_sigma_weights (float): scale/sigma of logpdf when generating particle weights
-
-            like_sigma_state_vector (float): scale/sigma of noise added to each value in state vector
+                                like_sigma_state_vector (float): scale/sigma of noise added to each value in state vector
 
     Attributes:
         obs (float): observation value of the current model timestep, set in due course thus optional
@@ -502,6 +505,7 @@ class EnsembleKalmanFilter(BaseModel):
     state_vectors: Optional[Any | None] = None
     predictions: Optional[Any | None] = None
     new_state_vectors: Optional[Any | None] = None
+    logger: list = [] # easier than using built in logger ?
 
 
     def update(self):
@@ -531,8 +535,9 @@ class EnsembleKalmanFilter(BaseModel):
         W = S.T * np.linalg.inv(S * S.T + E * E.T) * D_tilde
         T = np.identity(self.N) + (W / np.sqrt(self.N - 1))
 
-        self.new_state_vectors = prior_state_vector_Z * T # back to N x len(z) to be set correctly
-
+        self.new_state_vectors = np.array((prior_state_vector_Z * T).T) # back to N x len(z) to be set correctly
+        # check for negative values
+        self.new_state_vectors[self.new_state_vectors < 0] = 1e-6
 
 """
 Utility based functions

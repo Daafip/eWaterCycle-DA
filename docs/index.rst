@@ -15,5 +15,6 @@ More info to be added...
    :maxdepth: 2
    :caption: Contents:
              
-   example_HBV_model
+   example_HBV_model_PF
+   example_HBV_model_EnKF
 

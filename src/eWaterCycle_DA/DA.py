@@ -15,12 +15,15 @@ from pathlib import Path
 from pydantic import BaseModel
 from ewatercycle.base.forcing import DefaultForcing
 import ewatercycle
-from ewatercycle.models import HBV
+from ewatercycle.models import HBV, Lorenz
 
-loaded_models: dict[str, Any] = dict(
+LOADED_MODELS: dict[str, Any] = dict(
                                         HBV=ewatercycle.models.HBV,
+                                        Lorenz = ewatercycle.models.Lorenz,
                                      )
-
+LOADED_HYDROLOGY_MODELS: dict[str, Any] = dict(
+                                        HBV=ewatercycle.models.HBV)
+TLAG_MAX = 100 # sets maximum lag possible
 class Ensemble(BaseModel):
     """Class for running data assimilation in eWaterCycle
 
@@ -40,6 +43,8 @@ class Ensemble(BaseModel):
 
         observations: NetCDF file containing observations
 
+        lst_models_name: list containing a set of all the model names: i.e. to run checks
+
 
     Note:
         Run ``setup`` and ``initialize`` before using other functions
@@ -53,7 +58,9 @@ class Ensemble(BaseModel):
     ensemble_method: Any | None = None
     ensemble_method_name: str | None = None
     observed_variable_name: str | None = None
+    prediction_variable_name: str | None = None
     observations: Any | None = None
+    lst_models_name: list = []
     logger: list = [] # logging proved too complex for now so just append to list XD
 
 
@@ -112,8 +119,17 @@ class Ensemble(BaseModel):
             ensemble_member.verify_model_loaded()
             ensemble_member.setup()
             ensemble_member.initialize()
+            self.lst_models_name.append(ensemble_member.model_name)
 
-    def initialize_method(self, ensemble_method_name: str, observation_path: Path, observed_variable_name: str, hyper_parameters: dict):
+        self.lst_models_name = list(set(self.lst_models_name))
+
+    def initialize_method(self,
+                          ensemble_method_name: str,
+                          observation_path: Path,
+                          observed_variable_name: str,
+                          hyper_parameters: dict,
+                          prediction_variable_name: str | None = None,
+                          ):
         """Similar to initialize but specifically for the data assimilation method
 
         Args:
@@ -128,26 +144,39 @@ class Ensemble(BaseModel):
             hyper_parameters (dict): dictionary containing hyperparameters for the method, these will vary per method
                 and thus are merely passed on
 
+            prediction_variable_name (Optional[str]):is observed variable name is different from prediction variable name,
+                this can be used to fix that. In most cases it is easiest is to change your observation name but not always possible.
+
         Note:
             Assumed memory is large enough to hold observations in memory/lazy open with xarray
         """
         validate_method(ensemble_method_name)
-        self.ensemble_method = loaded_methods[ensemble_method_name](N=self.N)
+        self.ensemble_method = LOADED_METHODS[ensemble_method_name](N=self.N)
         self.ensemble_method_name = ensemble_method_name
         self.observed_variable_name = observed_variable_name
+        self.set_prediction_variable_name(prediction_variable_name)
         self.observations = self.load_netcdf(observation_path, observed_variable_name)
         for hyper_param in hyper_parameters:
             self.ensemble_method.hyperparameters[hyper_param] = hyper_parameters[hyper_param]
         self.ensemble_method.N = self.N
 
+    def set_prediction_variable_name(self, prediction_variable_name) -> None:
+        """In some cases the variable name you predict is different from the observed.
+           easiest is to change your observation name but not always possible"""
+        if prediction_variable_name is None:
+            self.prediction_variable_name = self.observed_variable_name
+        else:
+            self.prediction_variable_name = prediction_variable_name
 
     def finalize(self) -> None:
         """Runs finalize step for all members"""
         for ensemble_member in self.ensemble_list:
             ensemble_member.finalize()
 
-    def update(self) -> None:
+    def update(self, assimilate=True) -> None:
         """Updates model for all members.
+        Args:
+            assimilate (bool): Whether to assimilate in a given timestep. True by default.
         Algorithm flow:
             Gets the state vector, modeled outcome and corresponding observation
 
@@ -161,26 +190,43 @@ class Ensemble(BaseModel):
          """
 
         # you want the observation before you advance the model, as ensemble_member.update() already advances
-        # as day P & E of 0 correspond with Q of day 0.
-        current_time = np.datetime64(self.ensemble_list[0].model.time_as_datetime)
-        current_obs = float(self.observations.sel(time=current_time).values)
-        self.ensemble_method.obs = current_obs
+        # as day P & E of 0 correspond with Q of day 0. -
+        # # but breaks with other implementations?
 
-        # collect state vector
-        state_vectors_list = []
         for ensemble_member in self.ensemble_list:
             ensemble_member.update()
-            state_vectors_list.append(ensemble_member.get_state_vector())
-        self.ensemble_method.state_vectors = np.vstack(state_vectors_list) # N x len(z)
 
-        # collect predicted model outcome & pass on to ensemble method
-        self.ensemble_method.predictions = self.get_value(self.observed_variable_name)
+        if assimilate:
+            self.ensemble_method.state_vectors = self.get_state_vector()
+            self.logger.append(f'state_vector = {self.ensemble_method.state_vectors.shape}')
 
-        self.ensemble_method.update()
+            # get observations
+            current_time = np.datetime64(self.ensemble_list[0].model.time_as_datetime)
+            current_obs = self.observations.sel(time=current_time, method="nearest").values
+            self.ensemble_method.obs = current_obs
 
-        self.set_state_vector(self.ensemble_method.new_state_vectors)
+            # collect predicted model outcome & pass on to ensemble method
+            # TODO: these are currently presumed equal, but not per se always so: incase of streamflow -> yes
+            # TODO: in case of the lorenz model for example no
+            # TODO: as this is more a 1d approach
+            self.ensemble_method.predictions = self.get_value(self.prediction_variable_name)
 
-        self.config_specific_actions()
+            self.ensemble_method.update()
+
+            self.remove_negative()
+
+            self.set_state_vector(self.ensemble_method.new_state_vectors)
+
+            self.config_specific_actions()
+
+
+    def remove_negative(self):
+        """if only one model is loaded & hydrological: sets negative numbers to positive"""
+        if len(self.lst_models_name) == 1 and self.lst_models_name[0] in LOADED_HYDROLOGY_MODELS:
+                # set any values below 0 to small
+                self.ensemble_method.new_state_vectors[self.ensemble_method.new_state_vectors < 0] = 1e-6
+        else:
+            warnings.warn("More than 1 model type loaded, no non zero values removes",category=UserWarning)
 
     def config_specific_actions(self):
         """Function for actions which are specific to a combination of model with method.
@@ -204,15 +250,10 @@ class Ensemble(BaseModel):
         if self.ensemble_method_name == "PF":
             # in particle filter the whole particle needs to be copied
             # when dealing with lag this is difficult as we don't want it in the regular state vector
-            lst_models = []
-            for ensemble_member in self.ensemble_list:
-                lst_models.append(ensemble_member.model_name)
-            lst_models = list(set(lst_models))
 
-            if "HBV" in lst_models and len(lst_models) == 1:
+            if "HBV" in self.lst_models_name and len(self.lst_models_name) == 1:
                 # first get the memory vectors for all ensemble members
-                len_tlag = 20
-                lag_vector_arr = np.zeros((len(self.ensemble_list),len_tlag))
+                lag_vector_arr = np.zeros((len(self.ensemble_list),TLAG_MAX))
                 for index, ensemble_member in enumerate(self.ensemble_list):
                     t_lag = int(ensemble_member.get_value("Tlag")[0])
                     old_t_lag = np.array([ensemble_member.get_value(f"memory_vector{i}") for i in range(t_lag)]).flatten()
@@ -225,8 +266,8 @@ class Ensemble(BaseModel):
                     new_t_lag = ensembleMember.get_value(f"Tlag")
                     [ensembleMember.set_value(f"memory_vector{mem_index}", np.array([new_lag_vector_lst[index, mem_index]])) for mem_index in range(int(new_t_lag))]
 
-            elif "HBV" in lst_models:
-                warnings.warn(f"Models implemented:{lst_models}, could cause issues with particle filters"
+            elif "HBV" in self.lst_models_name:
+                warnings.warn(f"Models implemented:{self.lst_models_name}, could cause issues with particle filters"
                               'HBV needs to update the lag vector but cannot due to other model type(s)',
                               category=RuntimeWarning)
             else:
@@ -235,10 +276,18 @@ class Ensemble(BaseModel):
         #2...
 
     def get_value(self, var_name: str) -> np.ndarray:
-        """Gets current value of whole ensemble for given variable"""
-        output_array = np.zeros(self.N)
+        """Gets current value of whole ensemble for given variable ### currently assumes 2d, fix for 1d:"""
+        # infer shape of state vector:
+        ref_model = self.ensemble_list[0]
+        shape_data = ref_model.get_value(ref_model.variable_names[0]).shape[0]
+        # shape_var = len(self.variable_names)
+
+
+        output_array = np.zeros((self.N,shape_data))
+
+        self.logger.append(f'{output_array.shape}')
         for i, ensemble_member in enumerate(self.ensemble_list):
-            output_array[i] = ensemble_member.model.get_value(var_name)[0]
+            output_array[i] = ensemble_member.model.get_value(var_name)
         return output_array
 
     def get_state_vector(self) -> np.ndarray:
@@ -246,10 +295,11 @@ class Ensemble(BaseModel):
             Note:
                 Assumes 1d array? although :obj:`np.vstack` does work for 2d arrays
         """
+        # collect state vector
         output_lst = []
         for ensemble_member in self.ensemble_list:
             output_lst.append(ensemble_member.get_state_vector())
-        return np.vstack(output_lst)
+        return np.vstack(output_lst) # N x len(z)
 
     def set_value(self, var_name: str, src: np.ndarray) -> None:
         """Sets current value of whole ensemble for given variable
@@ -266,7 +316,9 @@ class Ensemble(BaseModel):
                 src (np.ndarray): size = number of ensemble members x number of states in state vector [N x len(z)]
                     src[0] should return the state vector for the first value
         """
+        self.logger.append(f'size_state_vector: {src.shape}')
         for i, ensemble_member in enumerate(self.ensemble_list):
+            self.logger.append(src[i])
             ensemble_member.set_state_vector(src[i])
 
     @staticmethod
@@ -330,7 +382,7 @@ class EnsembleMember(BaseModel):
 
     def setup(self) -> None:
         """Setups the model provided with forcing and kwargs. Set the config file"""
-        self.model = loaded_models[self.model_name](forcing=self.forcing)
+        self.model = LOADED_MODELS[self.model_name](forcing=self.forcing)
         self.config, _ = self.model.setup(**self.setup_kwargs)
 
     def initialize(self) -> None:
@@ -355,11 +407,20 @@ class EnsembleMember(BaseModel):
 
     def get_state_vector(self) -> np.ndarray:
         """Gets current state vector of ensemble member
-        Note: assumes a 1D grid currently as ``state_vector`` is 1D array.
+        Note: assumed a 1D grid currently as ``state_vector`` is 1D array.
+        Now check the shape of data and variables.
+
         """
-        self.state_vector = np.zeros(len(self.variable_names))
+        # infer shape of state vector:
+        shape_data = self.get_value(self.variable_names[0]).shape[0]
+        shape_var = len(self.variable_names)
+
+        self.state_vector = np.zeros((shape_var, shape_data))
         for v_index, var_name in enumerate(self.variable_names):
             self.state_vector[v_index] = self.get_value(var_name)
+        # changing to fit 2d, breaks 1d... better fix later:
+        if shape_data == 1:
+            self.state_vector = self.state_vector.T
 
         return self.state_vector
 
@@ -384,7 +445,7 @@ class EnsembleMember(BaseModel):
 
     def verify_model_loaded(self) -> None:
         """Checks whether specified model is available."""
-        if self.model_name in loaded_models:
+        if self.model_name in LOADED_MODELS:
             pass
         else:
             raise UserWarning(f"Defined model: {self.model} not loaded")
@@ -431,7 +492,7 @@ class ParticleFilter(BaseModel):
 
     hyperparameters: dict = dict(like_sigma_weights=0.05, like_sigma_state_vector=0.0005)
     N: int
-    obs: float | None = None
+    obs: float | Any | None = None
     state_vectors: Any | None = None
     predictions: Any | None = None
     weights: Any | None = None
@@ -443,6 +504,7 @@ class ParticleFilter(BaseModel):
         """Takes current state vectors of ensemble and returns updated state vectors ensemble
         """
         self.generate_weights()
+        # fix for 2d for now:
         self.resample_indices = random.choices(population=np.arange(self.N), weights=self.weights, k=self.N)
 
         new_state_vectors = self.state_vectors.copy()[self.resample_indices]
@@ -456,9 +518,6 @@ class ParticleFilter(BaseModel):
 
         self.new_state_vectors = new_state_vectors_transpose.T # back to N x len(z) to be set correctly
 
-        # check for negative values
-        self.new_state_vectors[self.new_state_vectors < 0] = 1e-6
-
 
     def generate_weights(self):
         """Takes the ensemble and observations and returns the posterior
@@ -470,6 +529,10 @@ class ParticleFilter(BaseModel):
         difference = (self.obs - self.predictions)
         unnormalised_log_weights = scipy.stats.norm.logpdf(difference, loc=0, scale=like_sigma)
         normalised_weights = np.exp(unnormalised_log_weights - scipy.special.logsumexp(unnormalised_log_weights))
+
+        # for now fix to 2d
+        if normalised_weights[0].size > 1:
+            normalised_weights = normalised_weights.mean(axis=1)
         self.weights = normalised_weights
 
 
@@ -513,6 +576,8 @@ class EnsembleKalmanFilter(BaseModel):
 
         TODO: refactor to be more readable
         """
+
+        # TODO: is obs are not float but array should be mXN, currently Nxm
         measurement_d = self.obs
         measurement_pertubation_matrix_E = np.array([add_normal_noise(self.hyperparameters['like_sigma_state_vector']) for x in range(self.N)])
         peturbed_measurements_D = measurement_d * np.ones(self.N).T + np.sqrt(
@@ -536,8 +601,8 @@ class EnsembleKalmanFilter(BaseModel):
         T = np.identity(self.N) + (W / np.sqrt(self.N - 1))
 
         self.new_state_vectors = np.array((prior_state_vector_Z * T).T) # back to N x len(z) to be set correctly
-        # check for negative values
-        self.new_state_vectors[self.new_state_vectors < 0] = 1e-6
+
+
 
 """
 Utility based functions
@@ -568,14 +633,14 @@ _____________
 
 """
 
-loaded_methods: dict[str, Any] = dict(
+LOADED_METHODS: dict[str, Any] = dict(
                                         PF=ParticleFilter,
                                         EnKF=EnsembleKalmanFilter,
                                      )
 def validate_method(method):
     """"Checks uses supplied method to ensure """
     try:
-        assert method in loaded_methods
+        assert method in LOADED_METHODS
     except AssertionError:
         raise UserWarning(f"Method: {method} not loaded, ensure specified method is compatible")
 

@@ -209,6 +209,7 @@ class Ensemble(BaseModel):
             # TODO: these are currently presumed equal, but not per se always so: incase of streamflow -> yes
             # TODO: in case of the lorenz model for example no
             # TODO: as this is more a 1d approach
+
             self.ensemble_method.predictions = self.get_value(self.prediction_variable_name)
 
             self.ensemble_method.update()
@@ -504,19 +505,44 @@ class ParticleFilter(BaseModel):
         """Takes current state vectors of ensemble and returns updated state vectors ensemble
         """
         self.generate_weights()
-        # fix for 2d for now:
-        self.resample_indices = random.choices(population=np.arange(self.N), weights=self.weights, k=self.N)
 
-        new_state_vectors = self.state_vectors.copy()[self.resample_indices]
-        new_state_vectors_transpose = new_state_vectors.T # change to len(z) x N so in future you can vary sigma
+        # TODO: Refactor to be more modular i.e. remove if/else
 
-        # for now just constant perturbation, can vary this hyperparameter
-        like_sigma = self.hyperparameters['like_sigma_state_vector']
-        for index, row in enumerate(new_state_vectors_transpose):
-            row_with_noise = np.array([s + add_normal_noise(like_sigma)for s in row])
-            new_state_vectors_transpose[index] = row_with_noise
+        # 1d for now: weights is N x 1
+        if self.weights[0].size == 1:
+            self.resample_indices = random.choices(population=np.arange(self.N), weights=self.weights, k=self.N)
 
-        self.new_state_vectors = new_state_vectors_transpose.T # back to N x len(z) to be set correctly
+            new_state_vectors = self.state_vectors.copy()[self.resample_indices]
+            new_state_vectors_transpose = new_state_vectors.T # change to len(z) x N so in future you can vary sigma
+
+            # for now just constant perturbation, can vary this hyperparameter
+            like_sigma = self.hyperparameters['like_sigma_state_vector']
+            for index, row in enumerate(new_state_vectors_transpose):
+                row_with_noise = np.array([s + add_normal_noise(like_sigma)for s in row])
+                new_state_vectors_transpose[index] = row_with_noise
+
+            self.new_state_vectors = new_state_vectors_transpose.T # back to N x len(z) to be set correctly
+
+        # 2d weights is N x len(z)
+        else:
+            # handel each row separately:
+            self.resample_indices = []
+            for i in range(len(self.weights[0])):
+                 self.resample_indices.append(random.choices(population=np.arange(self.N), weights=self.weights[:, i], k=self.N))
+            self.resample_indices = np.vstack(self.resample_indices)
+
+            new_state_vectors_transpose = self.state_vectors.copy().T
+            for index, indices in enumerate(self.resample_indices):
+                new_state_vectors_transpose[index] = new_state_vectors_transpose[index, indices]
+
+            # for now just constant perturbation, can vary this hyperparameter
+            like_sigma = self.hyperparameters['like_sigma_state_vector']
+            for index, row in enumerate(new_state_vectors_transpose):
+                row_with_noise = np.array([s + add_normal_noise(like_sigma) for s in row])
+                new_state_vectors_transpose[index] = row_with_noise
+
+            self.new_state_vectors = new_state_vectors_transpose.T  # back to N x len(z) to be set correctly
+
 
 
     def generate_weights(self):
@@ -531,8 +557,8 @@ class ParticleFilter(BaseModel):
         normalised_weights = np.exp(unnormalised_log_weights - scipy.special.logsumexp(unnormalised_log_weights))
 
         # for now fix to 2d
-        if normalised_weights[0].size > 1:
-            normalised_weights = normalised_weights.mean(axis=1)
+        # if normalised_weights[0].size > 1:
+        #     normalised_weights = normalised_weights.mean(axis=1)
         self.weights = normalised_weights
 
 

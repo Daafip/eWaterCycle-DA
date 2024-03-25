@@ -608,6 +608,7 @@ class EnsembleKalmanFilter(BaseModel):
         measurement_pertubation_matrix_E = np.array([add_normal_noise(self.hyperparameters['like_sigma_state_vector']) for x in range(self.N)])
         peturbed_measurements_D = measurement_d * np.ones(self.N).T + np.sqrt(
                                                                         self.N - 1) * measurement_pertubation_matrix_E
+
         predicted_measurements_Ypsilon = self.predictions
         prior_state_vector_Z = self.state_vectors.T
 
@@ -616,15 +617,22 @@ class EnsembleKalmanFilter(BaseModel):
         A_cross_A = np.matrix(
             (np.identity(self.N) - ((np.ones(self.N) @ np.ones(self.N).T) / self.N)))
 
+
+
         E = np.matrix(peturbed_measurements_D) * PI
-        Y = np.matrix(predicted_measurements_Ypsilon) * PI
+
+        Y = np.matrix(predicted_measurements_Ypsilon).T * PI
         if prior_state_vector_Z.shape[0] < self.N - 1:
             Y = Y * A_cross_A
         S = Y
-        D_tilde = np.matrix(peturbed_measurements_D - predicted_measurements_Ypsilon)
+        self.logger.append(f'{peturbed_measurements_D.shape}, {predicted_measurements_Ypsilon.shape}')
+        D_tilde = np.matrix(peturbed_measurements_D - predicted_measurements_Ypsilon[0])
 
-        W = S.T * np.linalg.inv(S * S.T + E * E.T) * D_tilde
+        self.logger.append(f'PI{PI.shape},E{E.shape}, Y{Y.shape}, D_tilde{D_tilde.shape}')
+        W = (S.T * np.linalg.inv(S * S.T + E * E.T)) * D_tilde
         T = np.identity(self.N) + (W / np.sqrt(self.N - 1))
+
+
 
         self.new_state_vectors = np.array((prior_state_vector_Z * T).T) # back to N x len(z) to be set correctly
 

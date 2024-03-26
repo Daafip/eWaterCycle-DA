@@ -13,19 +13,18 @@ More info to be added...
 
 There are two ways in this package of running data assimilation. The easiest & most user friendly is method 1 where you define the parameters used in DA upfront. 
 .. image:: Figures/method1_define_upfront.png
-   :height: 160px
-   :width: 230px
-
+   :height: 160
+   :width: 230
 
 The more advanced, but more powerful is method 2 where you define the parameters used in DA as you go. You can run the model, then decide to assimilate on the go. 
 .. image:: Figures/method2_define_on_the_go.png
-   :height: 160px
-   :width: 230px
+   :height: 160
+   :width: 230
 
 
 The added benefit of this model structure is that the package can also be used for ensembles which don't assimilate, like a collection of model comparisons:
 .. image:: Figures/method3_no_DA.png
-   :width: 230px
+   :width: 230
 
 
 .. toctree::

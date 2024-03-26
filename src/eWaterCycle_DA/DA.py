@@ -90,6 +90,7 @@ class Ensemble(BaseModel):
             state_vector_variables (str | :obj:`list[str]`): if not specified: by default 'all' known parameters,
                 can be a subset of all by passing a list containing strings of variable to include in the state vector.
                 Should you want to vary initial parameters, again all should be a list
+                TODO: change to observations? H input, 'that part of the statevector which contributes'
 
         Note:
             If you want to pass a list for any one variable, **all** others should be lists too of the same length.
@@ -146,6 +147,9 @@ class Ensemble(BaseModel):
 
             prediction_variable_name (Optional[str]):is observed variable name is different from prediction variable name,
                 this can be used to fix that. In most cases it is easiest is to change your observation name but not always possible.
+
+        TODO: rename to initialize_DA_method
+        
 
         Note:
             Assumed memory is large enough to hold observations in memory/lazy open with xarray
@@ -603,11 +607,19 @@ class EnsembleKalmanFilter(BaseModel):
         TODO: refactor to be more readable
         """
 
-        # TODO: is obs are not float but array should be mXN, currently Nxm
+        # TODO: is obs are not float but array should be mXN, currently Nxm -> fixed ?
         measurement_d = self.obs
+
         measurement_pertubation_matrix_E = np.array([add_normal_noise(self.hyperparameters['like_sigma_state_vector']) for x in range(self.N)])
-        peturbed_measurements_D = measurement_d * np.ones(self.N).T + np.sqrt(
+
+        if len(measurement_d) == 1:
+            peturbed_measurements_D = measurement_d * np.ones(self.N).T + np.sqrt(
                                                                         self.N - 1) * measurement_pertubation_matrix_E
+        else:
+            peturbed_measurements_D = np.matrix(measurement_d).T * np.matrix(np.ones(self.N).T) + np.sqrt(
+                                                                        self.N - 1) * measurement_pertubation_matrix_E
+
+
 
         predicted_measurements_Ypsilon = self.predictions
         prior_state_vector_Z = self.state_vectors.T
@@ -626,7 +638,10 @@ class EnsembleKalmanFilter(BaseModel):
             Y = Y * A_cross_A
         S = Y
         self.logger.append(f'{peturbed_measurements_D.shape}, {predicted_measurements_Ypsilon.shape}')
-        D_tilde = np.matrix(peturbed_measurements_D - predicted_measurements_Ypsilon[0])
+        if len(measurement_d) == 1:
+            D_tilde = np.matrix(peturbed_measurements_D - predicted_measurements_Ypsilon[0])
+        else:
+            D_tilde = np.matrix(peturbed_measurements_D - predicted_measurements_Ypsilon.T)
 
         self.logger.append(f'PI{PI.shape},E{E.shape}, Y{Y.shape}, D_tilde{D_tilde.shape}')
         W = (S.T * np.linalg.inv(S * S.T + E * E.T)) * D_tilde

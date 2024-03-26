@@ -367,7 +367,7 @@ class Ensemble(BaseModel):
         """Gets current value of whole ensemble for given variable ### currently assumes 2d, fix for 1d:"""
         # infer shape of state vector:
         ref_model = self.ensemble_list[0]
-        shape_data = ref_model.get_value(ref_model.variable_names[0]).shape[0]
+        shape_data = ref_model.get_value(var_name).shape[0]
         # shape_var = len(self.variable_names)
 
 

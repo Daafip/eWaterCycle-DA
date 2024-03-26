@@ -11,6 +11,7 @@ import scipy
 import numpy as np
 import xarray as xr
 from typing import Any, Optional
+import types
 from pathlib import Path
 from pydantic import BaseModel
 from ewatercycle.base.forcing import DefaultForcing
@@ -41,6 +42,9 @@ class Ensemble(BaseModel):
 
         observed_variable_name: Name of the observed value: often Q but could be anything
 
+        measurement_operator: Function or list of Functions which maps the state vector to the measurement space:
+            i.e. extracts the wanted value for comparison by the DA scheme from the state vector.   (Also known as H)
+
         observations: NetCDF file containing observations
 
         lst_models_name: list containing a set of all the model names: i.e. to run checks
@@ -58,7 +62,7 @@ class Ensemble(BaseModel):
     ensemble_method: Any | None = None
     ensemble_method_name: str | None = None
     observed_variable_name: str | None = None
-    prediction_variable_name: str | None = None
+    measurement_operator: Any | list | None = None
     observations: Any | None = None
     lst_models_name: list = []
     logger: list = [] # logging proved too complex for now so just append to list XD
@@ -73,7 +77,7 @@ class Ensemble(BaseModel):
         for ensemble_member in range(self.N):
             self.ensemble_list.append(EnsembleMember())
 
-    def initialize(self, model_name, forcing, setup_kwargs, state_vector_variables='all') -> None:
+    def initialize(self, model_name, forcing, setup_kwargs) -> None:
         """Takes empty Ensemble members and launches the model for given ensemble member
 
         Args:
@@ -87,11 +91,6 @@ class Ensemble(BaseModel):
                 UserWarning: Ensure your model saves all kwargs to the config
                 Should you want to vary initial parameters, again all should be a list
 
-            state_vector_variables (str | :obj:`list[str]`): if not specified: by default 'all' known parameters,
-                can be a subset of all by passing a list containing strings of variable to include in the state vector.
-                Should you want to vary initial parameters, again all should be a list
-                TODO: change to observations? H input, 'that part of the statevector which contributes'
-
         Note:
             If you want to pass a list for any one variable, **all** others should be lists too of the same length.
         """
@@ -102,16 +101,14 @@ class Ensemble(BaseModel):
                 ensemble_member.model_name = model_name
                 ensemble_member.forcing = forcing
                 ensemble_member.setup_kwargs = setup_kwargs
-                ensemble_member.state_vector_variables = state_vector_variables
 
         # more flexibility - could change in the future?
         elif type(model_name) == list and len(model_name) == self.N:
-            validity_initialize_input(model_name, forcing, setup_kwargs, state_vector_variables)
+            validity_initialize_input(model_name, forcing, setup_kwargs)
             for index_m, ensemble_member in enumerate(self.ensemble_list):
                 ensemble_member.model_name = model_name[index_m]
                 ensemble_member.forcing = forcing[index_m]
                 ensemble_member.setup_kwargs = setup_kwargs[index_m]
-                ensemble_member.state_vector_variables = state_vector_variables[index_m]
         else:
             raise SyntaxWarning(f"model should either string or list of string of length {self.N}")
 
@@ -124,53 +121,74 @@ class Ensemble(BaseModel):
 
         self.lst_models_name = list(set(self.lst_models_name))
 
-    def initialize_method(self,
+    def initialize_da_method(self,
                           ensemble_method_name: str,
-                          observation_path: Path,
-                          observed_variable_name: str,
                           hyper_parameters: dict,
-                          prediction_variable_name: str | None = None,
+                          state_vector_variables: str | list,
+                          observation_path: Path | None = None,
+                          observed_variable_name: str | None = None,
+                          measurement_operator: Any | list | None = None,
                           ):
         """Similar to initialize but specifically for the data assimilation method
 
         Args:
             ensemble_method_name (str): name of the data assimilation method for the ensemble
 
-            observation_path (Path): Path to a NetCDF file containing observations.
-                Ensure the time dimension is of type :obj:`numpy.datetime64[ns]` in order to work well with
-                 .. py:function:: `Ensemble.update`
-
-            observed_variable_name (str): Name of the observed value: often Q but could be anything
 
             hyper_parameters (dict): dictionary containing hyperparameters for the method, these will vary per method
                 and thus are merely passed on
 
-            prediction_variable_name (Optional[str]):is observed variable name is different from prediction variable name,
-                this can be used to fix that. In most cases it is easiest is to change your observation name but not always possible.
+            state_vector_variables (Optional[str | :obj:`list[str]`]): can be set to 'all' for known parameters, this is
+                highly model and scenario specific & should be implemented separately. Currently known to work for:
 
-        TODO: rename to initialize_DA_method
-        
+                 - ewatercycle-HBV
+                 - ...
+
+                Can be a set by passing a list containing strings of variable to include in the state vector.
+
+                Changing to a subset allows you to do interesting things with ensembles: mainly limited to particle filters.
+
+                For example giving half the particle filters more variables which vary than others - see what that does.
+
+        Info:
+            The following three are Keyword Args to make the code more flexible: when running the initialize_da_method
+            to set up the ensemble normally *these are all needed*. They are separate as these aren't needed if DA is done
+            on the fly.
+
+        Keyword Args:
+            observation_path (Path) = None: Path to a NetCDF file containing observations.
+                Ensure the time dimension is of type :obj:`numpy.datetime64[ns]` in order to work well with
+                 .. py:function:: `Ensemble.update`
+
+            observed_variable_name (str) = None: Name of the observed value: often Q but could be anything
+
+            measurement_operator (:obj:`function`| :obj:`list[functions]`) = None: if not specified: by default 'all' known parameters,
+                can be a subset of all by passing a list containing strings of variable to include in the state vector.
+                Should you want to vary initial parameters, again all should be a list
 
         Note:
             Assumed memory is large enough to hold observations in memory/lazy open with xarray
         """
         validate_method(ensemble_method_name)
+
         self.ensemble_method = LOADED_METHODS[ensemble_method_name](N=self.N)
         self.ensemble_method_name = ensemble_method_name
-        self.observed_variable_name = observed_variable_name
-        self.set_prediction_variable_name(prediction_variable_name)
-        self.observations = self.load_netcdf(observation_path, observed_variable_name)
+
         for hyper_param in hyper_parameters:
             self.ensemble_method.hyperparameters[hyper_param] = hyper_parameters[hyper_param]
+
         self.ensemble_method.N = self.N
 
-    def set_prediction_variable_name(self, prediction_variable_name) -> None:
-        """In some cases the variable name you predict is different from the observed.
-           easiest is to change your observation name but not always possible"""
-        if prediction_variable_name is None:
-            self.prediction_variable_name = self.observed_variable_name
-        else:
-            self.prediction_variable_name = prediction_variable_name
+        for ensemble_member in self.ensemble_list:
+            ensemble_member.state_vector_variables = state_vector_variables
+            ensemble_member.set_state_vector_variable()
+
+        # only set if specified
+        if not None in [observed_variable_name, observation_path, measurement_operator]:
+            self.observed_variable_name = observed_variable_name
+            self.observations = self.load_netcdf(observation_path, observed_variable_name)
+            self.measurement_operator = measurement_operator
+
 
     def finalize(self) -> None:
         """Runs finalize step for all members"""
@@ -201,32 +219,97 @@ class Ensemble(BaseModel):
             ensemble_member.update()
 
         if assimilate:
-            self.ensemble_method.state_vectors = self.get_state_vector()
-            self.logger.append(f'state_vector = {self.ensemble_method.state_vectors.shape}')
-
             # get observations
             current_time = np.datetime64(self.ensemble_list[0].model.time_as_datetime)
             current_obs = self.observations.sel(time=current_time, method="nearest").values
-            self.ensemble_method.obs = current_obs
 
-            # collect predicted model outcome & pass on to ensemble method
-            # TODO: these are currently presumed equal, but not per se always so: incase of streamflow -> yes
-            # TODO: in case of the lorenz model for example no
-            # TODO: as this is more a 1d approach
 
-            self.ensemble_method.predictions = self.get_value(self.prediction_variable_name)
+            self.assimilate(ensemble_method_name=self.ensemble_method_name,
+                            obs=current_obs,
+                            measurement_operator = self.measurement_operator,
+                            hyper_parameters = self.ensemble_method.hyperparameters,
+                            state_vector_variables = None, # maybe fix later? - currently don't have acces
+                            )
 
-            self.ensemble_method.update()
+    def assimilate(self,
+                   ensemble_method_name: str,
+                   obs: np.ndarray,
+                   measurement_operator,
+                   hyper_parameters: dict,
+                   state_vector_variables: str | list | None,
+                   ):
 
-            self.remove_negative()
+        """" Similar to calling .. py:function:: Ensemble.update(assimilate=True)
+        Intended for advanced users!
+        The assimilate class aims to make on the fly data assimilation possible.
+        You only need to define which method, observations and H operator you wish to use.
+        This however requires more know-how of the situation,
 
-            self.set_state_vector(self.ensemble_method.new_state_vectors)
+        Args:
+            ensemble_method_name (str): name of the data assimilation method for the ensemble
 
-            self.config_specific_actions()
+            obs (np.ndarray): array of observations for given timestep.
 
+            measurement_operator (:obj:`function`| :obj:`list[functions]`): maps
+
+            hyper_parameters (dict): dictionary of hyperparameters to set to DA method
+
+            state_vector_variables (str | :obj:`list[str]`| None): can be set to 'all' for known parameters, this is
+                highly model and scenario specific & should be implemented separately. Currently known to work for:
+
+                 - ewatercycle-HBV
+                 - ...
+
+                Can be a set by passing a list containing strings of variable to include in the state vector.
+
+                Changing to a subset allows you to do interesting things with ensembles: mainly limited to particle filters.
+
+                For example giving half the particle filters more variables which vary than others - see what that does.
+
+                set to None is called from .. py:function: Ensemble.update(assimilate=true)
+
+        """
+        # if on the fly da: we need to initialize here:
+        if self.ensemble_method is None:
+            self.initialize_da_method(ensemble_method_name=ensemble_method_name,
+                                      hyper_parameters=hyper_parameters,
+                                      state_vector_variables = state_vector_variables)
+
+        self.ensemble_method.state_vectors = self.get_state_vector()
+
+        self.ensemble_method.predictions = self.get_predicted_values(measurement_operator)
+
+        self.ensemble_method.obs = obs
+
+        self.ensemble_method.update()
+
+        self.remove_negative()
+
+        self.set_state_vector(self.ensemble_method.new_state_vectors)
+
+        self.config_specific_actions()
+
+
+    def get_predicted_values(self, measurement_operator) -> np.ndarray:
+        """"Loops over the state vectors and applies specified measurement operator to obtain predicted value"""
+        predicted_values = []
+        if type(measurement_operator) == list:
+            # if a list is passed, its a list of operators per ensemble member
+            for index, ensemble_state_vector in enumerate(self.ensemble_method.state_vectors):
+                predicted_values.append(measurement_operator[index](ensemble_state_vector))
+
+        elif type(measurement_operator) == types.FunctionType:
+            # if a just a function is passed, apply same to all
+            for ensemble_state_vector in self.ensemble_method.state_vectors:
+                predicted_values.append(measurement_operator(ensemble_state_vector))
+        else:
+            raise RuntimeError(f"Invalid type {measurement_operator}, should be either list of function but is ")
+
+        return np.vstack(predicted_values)
 
     def remove_negative(self):
-        """if only one model is loaded & hydrological: sets negative numbers to positive"""
+        """if only one model is loaded & hydrological: sets negative numbers to positive
+           Other models such as the lorenz model can be negative"""
         if len(self.lst_models_name) == 1 and self.lst_models_name[0] in LOADED_HYDROLOGY_MODELS:
                 # set any values below 0 to small
                 self.ensemble_method.new_state_vectors[self.ensemble_method.new_state_vectors < 0] = 1e-6
@@ -357,10 +440,14 @@ class EnsembleMember(BaseModel):
             `model.setup(**setup_kwargs)`. UserWarning: Ensure your model saves all kwargs to the config
             Should you want to vary initial parameters, again all should be a list
 
-        state_vector_variables (str | :obj:`list[str]`): By default 'all' known parameters,
-            can be a subset of all by passing a list containing strings of variable to include in the state vector.
+        state_vector_variables (Optional[str | :obj:`list[str]`]): can be set to 'all' for known parameters, this is
+            highly model and scenario specific & should be implemented separately. Currently known to work for:
+                 - ewatercycle-HBV
+                 - ...
+            Can be a set by passing a list containing strings of variable to include in the state vector.
             Changing to a subset allows you to do interesting things with ensembles: mainly limited to particle filters.
             For example giving half the particle filters more variables which vary than others - see what that does.
+            TODO: refactor to be more on the fly
 
 
     Attributes:
@@ -378,7 +465,8 @@ class EnsembleMember(BaseModel):
     model_name: str | None = None
     forcing: DefaultForcing | None = None
     setup_kwargs: dict | None = None
-    state_vector_variables: str | list = "all"
+
+    state_vector_variables: Optional[str | list] = None
 
     model: Any | None = None
     config: Path | None = None
@@ -394,16 +482,30 @@ class EnsembleMember(BaseModel):
         """Initializes the model with the config file generated in setup"""
         self.model.initialize(self.config)
 
-        # set correct variable names
-        if self.state_vector_variables == "all":
-            self.variable_names = list(dict(self.model.parameters).keys()) + list(dict(self.model.states).keys())
+    def set_state_vector_variable(self):
+        """"Set the list of  variables required to obtain the state vector"""
+        if self.state_vector_variables is None:
+            raise UserWarning(f'State_vector_variables: {self.state_vector_variables}'
+                              +"Must be 'all' or list[str] containing wanted variables.")
 
-        elif type(self.state_vector_variables) == list:
+        elif self.state_vector_variables == "all":
+            if self.model_name == "HBV":
+                self.variable_names = list(dict(self.model.parameters).keys()) \
+                                      + list(dict(self.model.states).keys())   \
+                                      + ["Q"]
+            # elif self.model == "..."
+            else:
+                raise RuntimeWarning(f"Default 'all' is not specified for {self.model_name}" \
+                                     + "Please pass a list of variable or submit PR.")
+                # also change teh documentation initialize_da_method
+
+        elif type(self.state_vector_variables) == list and type(self.state_vector_variables[0]) == str:
             self.variable_names = self.state_vector_variables
 
         else:
             raise UserWarning(f"Invalid input state_vector_variables: {self.state_vector_variables}"\
                               +"Must be 'all' or list[str] containing wanted variables.")
+
 
 
     def get_value(self, var_name: str) -> np.ndarray:
@@ -417,6 +519,9 @@ class EnsembleMember(BaseModel):
 
         """
         # infer shape of state vector:
+        if self.variable_names is None:
+            raise UserWarning(f'First set variable names through `initialize_da_method`')
+
         shape_data = self.get_value(self.variable_names[0]).shape[0]
         shape_var = len(self.variable_names)
 
@@ -694,19 +799,15 @@ def validate_method(method):
         raise UserWarning(f"Method: {method} not loaded, ensure specified method is compatible")
 
 
-def validity_initialize_input(model_name, forcing, setup_kwargs, state_vector_variables) -> None:
+def validity_initialize_input(model_name, forcing, setup_kwargs) -> None:
     """Checks user input to avoid confusion: if model_name is a list, all others must be too."""
     try:
         assert type(forcing) == list
         assert type(setup_kwargs) == list
-        assert type(state_vector_variables) == list
     except AssertionError:
-        raise UserWarning("forcing, setup_kwargs &"\
-                         +"state_vector_variables should be list")
+        raise UserWarning("forcing & setup_kwargs should be list")
     try:
         assert len(model_name) == len(forcing)
         assert len(model_name) == len(setup_kwargs)
-        assert len(model_name) == len(state_vector_variables)
     except AssertionError:
-        raise UserWarning("Length of lists: model_name, forcing, setup_kwargs &"\
-                         +"state_vector_variables should be the same length")
+        raise UserWarning("Length of lists: model_name, forcing & setup_kwargs should be the same length")

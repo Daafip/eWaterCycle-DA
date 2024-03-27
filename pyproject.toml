@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/ewatercycle_DA/__init__.py"
+
+[project]
+name = "ewatercycle-DA"
+description = "Implementation of data assimilation for eWaterCycle"
+readme = "README.md"
+license = "Apache-2.0"
+authors = [
+  { name = "David Haasnoot", email = "davidhaasnoot@gmail.com" },
+]
+keywords = ["ewatercycle", "hydrology", "data assimilation","parallelisation"]
+classifiers = [
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Natural Language :: English",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3 :: Only",
+]
+
+
+
+# Include here only the dependencies for the eWaterCycle wrapped model
+dependencies = [
+  "ewatercycle",
+]
+dynamic = ["version"]
+
+# This registers the plugin such that it is discoverable by eWaterCycle
+[project.entry-points."ewatercycle.utils"]
+Ensemble = "eWaterCycle_da.DA:Ensemble"
+
+
+[project.urls]
+homepage = "https://github.com/Daafip/ewatercycle-da"

@@ -21,10 +21,11 @@ from ewatercycle.models import HBV, Lorenz
 LOADED_MODELS: dict[str, Any] = dict(
                                         HBV=ewatercycle.models.HBV,
                                         Lorenz = ewatercycle.models.Lorenz,
+                                        ParallelisationSleep = ewatercycle.models.ParallelisationSleep,
                                      )
 LOADED_HYDROLOGY_MODELS: dict[str, Any] = dict(
                                         HBV=ewatercycle.models.HBV)
-TLAG_MAX = 100 # sets maximum lag possible
+TLAG_MAX = 100 # sets maximum lag possible (d)
 class Ensemble(BaseModel):
     """Class for running data assimilation in eWaterCycle
 
@@ -655,19 +656,13 @@ class ParticleFilter(BaseModel):
 
 
     def generate_weights(self):
-        """Takes the ensemble and observations and returns the posterior
+        """Takes the ensemble and observations and returns the posterior"""
 
-        Todo: Check if still correct function - iterated a lot through the notebooks
-
-        """
         like_sigma = self.hyperparameters['like_sigma_weights']
         difference = (self.obs - self.predictions)
         unnormalised_log_weights = scipy.stats.norm.logpdf(difference, loc=0, scale=like_sigma)
         normalised_weights = np.exp(unnormalised_log_weights - scipy.special.logsumexp(unnormalised_log_weights))
 
-        # for now fix to 2d
-        # if normalised_weights[0].size > 1:
-        #     normalised_weights = normalised_weights.mean(axis=1)
         self.weights = normalised_weights
 
 
@@ -712,19 +707,13 @@ class EnsembleKalmanFilter(BaseModel):
         TODO: refactor to be more readable
         """
 
-        # TODO: is obs are not float but array should be mXN, currently Nxm -> fixed ?
+        # TODO: is obs are not float but array should be mXN, currently m = 1: E should be mxN, D should be m x N
         measurement_d = self.obs
 
-        measurement_pertubation_matrix_E = np.array([add_normal_noise(self.hyperparameters['like_sigma_state_vector']) for x in range(self.N)])
+        measurement_pertubation_matrix_E = np.array([add_normal_noise(self.hyperparameters['like_sigma_state_vector']) for _ in range(self.N)])
 
-        if len(measurement_d) == 1:
-            peturbed_measurements_D = measurement_d * np.ones(self.N).T + np.sqrt(
+        peturbed_measurements_D = measurement_d * np.ones(self.N).T + np.sqrt(
                                                                         self.N - 1) * measurement_pertubation_matrix_E
-        else:
-            peturbed_measurements_D = np.matrix(measurement_d).T * np.matrix(np.ones(self.N).T) + np.sqrt(
-                                                                        self.N - 1) * measurement_pertubation_matrix_E
-
-
 
         predicted_measurements_Ypsilon = self.predictions
         prior_state_vector_Z = self.state_vectors.T
@@ -735,7 +724,6 @@ class EnsembleKalmanFilter(BaseModel):
             (np.identity(self.N) - ((np.ones(self.N) @ np.ones(self.N).T) / self.N)))
 
 
-
         E = np.matrix(peturbed_measurements_D) * PI
 
         Y = np.matrix(predicted_measurements_Ypsilon).T * PI
@@ -743,10 +731,8 @@ class EnsembleKalmanFilter(BaseModel):
             Y = Y * A_cross_A
         S = Y
         self.logger.append(f'{peturbed_measurements_D.shape}, {predicted_measurements_Ypsilon.shape}')
-        if len(measurement_d) == 1:
-            D_tilde = np.matrix(peturbed_measurements_D - predicted_measurements_Ypsilon[0])
-        else:
-            D_tilde = np.matrix(peturbed_measurements_D - predicted_measurements_Ypsilon.T)
+
+        D_tilde = np.matrix(peturbed_measurements_D - predicted_measurements_Ypsilon[0])
 
         self.logger.append(f'PI{PI.shape},E{E.shape}, Y{Y.shape}, D_tilde{D_tilde.shape}')
         W = (S.T * np.linalg.inv(S * S.T + E * E.T)) * D_tilde

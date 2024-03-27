@@ -2,6 +2,16 @@
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/ewatercycle_DA"
+]
+
+[tool.hatch.build.targets.wheel]
+packages = [
+    "src/ewatercycle_DA"
+]
+
 [tool.hatch.version]
 path = "src/ewatercycle_DA/__init__.py"
 
@@ -10,6 +20,7 @@ name = "ewatercycle-DA"
 description = "Implementation of data assimilation for eWaterCycle"
 readme = "README.md"
 license = "Apache-2.0"
+version = "0.0.1"
 authors = [
   { name = "David Haasnoot", email = "davidhaasnoot@gmail.com" },
 ]
@@ -29,7 +40,7 @@ classifiers = [
 dependencies = [
   "ewatercycle",
 ]
-dynamic = ["version"]
+
 
 # This registers the plugin such that it is discoverable by eWaterCycle
 [project.entry-points."ewatercycle.utils"]

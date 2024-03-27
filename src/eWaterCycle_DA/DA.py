@@ -151,7 +151,7 @@ class Ensemble(BaseModel):
 
                 For example giving half the particle filters more variables which vary than others - see what that does.
 
-        Info:
+        Note:
             The following three are Keyword Args to make the code more flexible: when running the initialize_da_method
             to set up the ensemble normally *these are all needed*. They are separate as these aren't needed if DA is done
             on the fly.

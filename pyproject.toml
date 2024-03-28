@@ -10,7 +10,7 @@ packages = ["src/ewatercycle_DA"]
 path = "src/ewatercycle_DA/__init__.py"
 
 [project]
-name = "ewatercycle_DA"
+name = "ewatercycle-DA"
 description = "Implementation of data assimilation for eWaterCycle"
 readme = "README.md"
 license = "Apache-2.0"

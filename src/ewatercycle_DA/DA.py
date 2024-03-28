@@ -10,12 +10,18 @@ import warnings
 import scipy
 import numpy as np
 import xarray as xr
-from typing import Any, Optional
+
+import dask
+from dask import delayed
+import psutil
+
 import types
+from typing import Any, Optional
 from pathlib import Path
 from pydantic import BaseModel
-from ewatercycle.base.forcing import DefaultForcing
+
 import ewatercycle
+from ewatercycle.base.forcing import DefaultForcing
 from ewatercycle.models import HBV, Lorenz
 
 LOADED_MODELS: dict[str, Any] = dict(
@@ -26,6 +32,7 @@ LOADED_MODELS: dict[str, Any] = dict(
 LOADED_HYDROLOGY_MODELS: dict[str, Any] = dict(
                                         HBV=ewatercycle.models.HBV)
 TLAG_MAX = 100 # sets maximum lag possible (d)
+
 class Ensemble(BaseModel):
     """Class for running data assimilation in eWaterCycle
 
@@ -33,6 +40,11 @@ class Ensemble(BaseModel):
         N : Number of ensemble members
 
         location : Where the model is run, by default local - change to remote later
+
+        dask_config: Dictionary to pass to .. :py:`dask.config.set()`
+                    see `dask docs <https://docs.dask.org/en/stable/scheduler-overview.html>`_
+                    Will default to same number of workers and physical processors.
+                    Use with care, too many workers will overload the infrastructure.
 
     Attributes:
         ensemble_method: method used for data assimilation
@@ -58,6 +70,8 @@ class Ensemble(BaseModel):
 
     N: int
     location: str = "local"
+    dask_config: dict = {"multiprocessing.context": "spawn",
+                         'num_workers': psutil.cpu_count(logical=False)}
 
     ensemble_list: list = []
     ensemble_method: Any | None = None
@@ -67,7 +81,6 @@ class Ensemble(BaseModel):
     observations: Any | None = None
     lst_models_name: list = []
     logger: list = [] # logging proved too complex for now so just append to list XD
-
 
     def setup(self) -> None:
         """Creates a set of empty Ensemble member instances
@@ -113,14 +126,28 @@ class Ensemble(BaseModel):
         else:
             raise SyntaxWarning(f"model should either string or list of string of length {self.N}")
 
-        # setup & initialize - same in both cases
-        for ensemble_member in self.ensemble_list:
-            ensemble_member.verify_model_loaded()
-            ensemble_member.setup()
-            ensemble_member.initialize()
-            self.lst_models_name.append(ensemble_member.model_name)
+        # setup & initialize - same in both cases - in parallel
+        gathered_initialize = self.gather(*[self.initialize_parallel(self, i) for i in range(self.N)])
 
-        self.lst_models_name = list(set(self.lst_models_name))
+        with dask.config.set(self.dask_config):
+            # starting too many dockers at once isn't great for the stability, limit to 1 for now
+            lst_models_name = gathered_initialize.compute(num_workers=1)
+
+        self.lst_models_name = list(set(lst_models_name))
+
+    @staticmethod
+    @delayed
+    def gather(*args):
+        return list(args)
+
+    @staticmethod
+    @delayed
+    def initialize_parallel(ensemble, i):
+        ensemble_member = ensemble.ensemble_list[i]
+        ensemble_member.verify_model_loaded()
+        ensemble_member.setup()
+        ensemble_member.initialize()
+        return ensemble_member.model_name
 
     def initialize_da_method(self,
                           ensemble_method_name: str,
@@ -180,9 +207,13 @@ class Ensemble(BaseModel):
 
         self.ensemble_method.N = self.N
 
-        for ensemble_member in self.ensemble_list:
-            ensemble_member.state_vector_variables = state_vector_variables
-            ensemble_member.set_state_vector_variable()
+        # TODO currently assumes state vector variables is the same for all ensemble members
+        # TODO should also be list
+        gathered_initialize_da_method = (self.gather(*[self.initialize_da_method_parallel(self, state_vector_variables, i)
+                                                      for i in range(self.N)]))
+
+        with dask.config.set(self.dask_config):
+            gathered_initialize_da_method.compute()
 
         # only set if specified
         if not None in [observed_variable_name, observation_path, measurement_operator]:
@@ -190,11 +221,27 @@ class Ensemble(BaseModel):
             self.observations = self.load_netcdf(observation_path, observed_variable_name)
             self.measurement_operator = measurement_operator
 
+    @staticmethod
+    @delayed
+    def initialize_da_method_parallel(ensemble, state_vector_variables, i):
+        ensemble_member = ensemble.ensemble_list[i]
+        ensemble_member.state_vector_variables = state_vector_variables
+        ensemble_member.set_state_vector_variable()
+
 
     def finalize(self) -> None:
         """Runs finalize step for all members"""
-        for ensemble_member in self.ensemble_list:
-            ensemble_member.finalize()
+        gathered_finalize = (self.gather(*[self.finalize_parallel(self, i) for i in range(self.N)]))
+
+        with dask.config.set(self.dask_config):
+            gathered_finalize.compute()
+
+    # TODO: think if this is a good idea
+    @staticmethod
+    @delayed
+    def finalize_parallel(ensemble, i):
+        ensemble_member = ensemble.ensemble_list[i]
+        ensemble_member.finalize()
 
     def update(self, assimilate=True) -> None:
         """Updates model for all members.
@@ -216,8 +263,10 @@ class Ensemble(BaseModel):
         # as day P & E of 0 correspond with Q of day 0. -
         # # but breaks with other implementations?
 
-        for ensemble_member in self.ensemble_list:
-            ensemble_member.update()
+        gathered_update = (self.gather(*[self.update_parallel(self, i) for i in range(self.N)]))
+
+        with dask.config.set(self.dask_config):
+            gathered_update.compute()
 
         if assimilate:
             # get observations
@@ -231,6 +280,13 @@ class Ensemble(BaseModel):
                             hyper_parameters = self.ensemble_method.hyperparameters,
                             state_vector_variables = None, # maybe fix later? - currently don't have acces
                             )
+
+
+    @staticmethod
+    @delayed
+    def update_parallel(ensemble, i):
+        ensemble_member = ensemble.ensemble_list[i]
+        ensemble_member.update()
 
     def assimilate(self,
                    ensemble_method_name: str,
@@ -295,7 +351,7 @@ class Ensemble(BaseModel):
         """"Loops over the state vectors and applies specified measurement operator to obtain predicted value"""
         predicted_values = []
         if type(measurement_operator) == list:
-            # if a list is passed, its a list of operators per ensemble member
+            # if a list is passed, it's a list of operators per ensemble member
             for index, ensemble_state_vector in enumerate(self.ensemble_method.state_vectors):
                 predicted_values.append(measurement_operator[index](ensemble_state_vector))
 
@@ -372,12 +428,27 @@ class Ensemble(BaseModel):
         # shape_var = len(self.variable_names)
 
 
-        output_array = np.zeros((self.N,shape_data))
+        output_array = np.zeros((self.N, shape_data))
 
         self.logger.append(f'{output_array.shape}')
-        for i, ensemble_member in enumerate(self.ensemble_list):
-            output_array[i] = ensemble_member.model.get_value(var_name)
+        # for i, ensemble_member in enumerate(self.ensemble_list):
+        #     output_array[i] = ensemble_member.model.get_value(var_name)
+        # return output_array
+
+        gathered_get_value = (self.gather(*[self.get_value_parallel(self,var_name, i) for i in range(self.N)]))
+
+        with dask.config.set(self.dask_config):
+            get_value_lst = gathered_get_value.compute()
+
+        output_array = np.vstack(get_value_lst)
+        self.logger.append(f'{output_array.shape}')
         return output_array
+
+    @staticmethod
+    @delayed
+    def get_value_parallel(ensemble, var_name, i):
+        ensemble_member = ensemble.ensemble_list[i]
+        return ensemble_member.model.get_value(var_name)
 
     def get_state_vector(self) -> np.ndarray:
         """Gets current value of whole ensemble for specified state vector
@@ -385,18 +456,40 @@ class Ensemble(BaseModel):
                 Assumes 1d array? although :obj:`np.vstack` does work for 2d arrays
         """
         # collect state vector
-        output_lst = []
-        for ensemble_member in self.ensemble_list:
-            output_lst.append(ensemble_member.get_state_vector())
+        # output_lst = []
+        # for ensemble_member in self.ensemble_list:
+        #     output_lst.append(ensemble_member.get_state_vector())
+
+        gathered_get_state_vector = (self.gather(*[self.get_state_vector_parallel(self, i) for i in range(self.N)]))
+
+        with dask.config.set(self.dask_config):
+            output_lst = gathered_get_state_vector.compute()
+
         return np.vstack(output_lst) # N x len(z)
+
+    @staticmethod
+    @delayed
+    def get_state_vector_parallel(ensemble, i):
+        ensemble_member = ensemble.ensemble_list[i]
+        return ensemble_member.get_state_vector()
 
     def set_value(self, var_name: str, src: np.ndarray) -> None:
         """Sets current value of whole ensemble for given variable
             args:
                 src (np.ndarray): size = number of ensemble members x 1 [N x 1]
         """
-        for i, ensemble_member in enumerate(self.ensemble_list):
-            ensemble_member.model.set_value(var_name, src[i])
+        # for i, ensemble_member in enumerate(self.ensemble_list):
+        #     ensemble_member.model.set_value(var_name, src[i])
+        gathered_set_value = (self.gather(*[self.set_value_parallel(self, var_name, src[i], i) for i in range(self.N)]))
+
+        with dask.config.set(self.dask_config):
+            gathered_set_value.compute()
+
+    @staticmethod
+    @delayed
+    def set_value_parallel(ensemble, var_name, src_i, i):
+        ensemble_member = ensemble.ensemble_list[i]
+        return ensemble_member.model.set_value(var_name,src_i)
 
     def set_state_vector(self, src: np.ndarray) -> None:
         """Sets current value of whole ensemble for specified state vector
@@ -405,10 +498,19 @@ class Ensemble(BaseModel):
                 src (np.ndarray): size = number of ensemble members x number of states in state vector [N x len(z)]
                     src[0] should return the state vector for the first value
         """
-        self.logger.append(f'size_state_vector: {src.shape}')
-        for i, ensemble_member in enumerate(self.ensemble_list):
-            self.logger.append(src[i])
-            ensemble_member.set_state_vector(src[i])
+        # for i, ensemble_member in enumerate(self.ensemble_list):
+        #     ensemble_member.set_state_vector(src[i])
+        gathered_set_state_vector = (self.gather(*[self.set_state_vector_parallel(self,src[i], i) for i in range(self.N)]))
+
+        with dask.config.set(self.dask_config):
+            gathered_set_state_vector.compute()
+
+
+    @staticmethod
+    @delayed
+    def set_state_vector_parallel(ensemble, src_i, i):
+        ensemble_member = ensemble.ensemble_list[i]
+        return ensemble_member.set_state_vector(src_i)
 
     @staticmethod
     def load_netcdf(observation_path: Path, observed_variable_name: str) -> xr.DataArray:
@@ -498,8 +600,9 @@ class EnsembleMember(BaseModel):
             else:
                 raise RuntimeWarning(f"Default 'all' is not specified for {self.model_name}" \
                                      + "Please pass a list of variable or submit PR.")
-                # also change teh documentation initialize_da_method
+                # also change the documentation initialize_da_method
 
+        # TODO more elegant type checking availible
         elif type(self.state_vector_variables) == list and type(self.state_vector_variables[0]) == str:
             self.variable_names = self.state_vector_variables
 

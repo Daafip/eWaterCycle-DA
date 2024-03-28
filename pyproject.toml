@@ -43,8 +43,9 @@ dependencies = [
 
 
 # This registers the plugin such that it is discoverable by eWaterCycle
-[project.entry-points."ewatercycle.utils"]
-Ensemble = "eWaterCycle_da.DA:Ensemble"
+#### maybe in future
+#[project.entry-points."ewatercycle.utils"]
+#Ensemble = "eWaterCycle_da.DA:Ensemble"
 
 
 [project.urls]

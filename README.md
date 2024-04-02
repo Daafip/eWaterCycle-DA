@@ -72,8 +72,8 @@ ensemble.initialize_da_method(ensemble_method_name = "PF",
                                                'like_sigma_weights' : 0.05,
                                                'like_sigma_state_vector' : 0.01,
                                                  },
-                              
-                              state_vector_variables = "all", # the next three are keyword arguments but are needed. 
+                              state_vector_variables = "all", 
+                              # the next three are keyword arguments but are needed:
                               observation_path = ds_obs_dir,
                               observed_variable_name = "Q",
                               measurement_operator = H, 

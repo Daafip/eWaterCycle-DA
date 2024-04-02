@@ -62,6 +62,10 @@ class Ensemble(BaseModel):
 
         lst_models_name: list containing a set of all the model names: i.e. to run checks
 
+        logger: list to debug issues, this isn't the best way to debug/log but works for me
+
+        config_specific_storage: used by the config_specific_actions
+
 
     Note:
         Run ``setup`` and ``initialize`` before using other functions
@@ -81,6 +85,7 @@ class Ensemble(BaseModel):
     observations: Any | None = None
     lst_models_name: list = []
     logger: list = [] # logging proved too complex for now so just append to list XD
+    config_specific_storage: Any | None = None
 
     def setup(self) -> None:
         """Creates a set of empty Ensemble member instances
@@ -196,6 +201,7 @@ class Ensemble(BaseModel):
 
         Note:
             Assumed memory is large enough to hold observations in memory/lazy open with xarray
+            Assumed memory is large enough to hold observations in memory/lazy open with xarray
         """
         validate_method(ensemble_method_name)
 
@@ -278,7 +284,7 @@ class Ensemble(BaseModel):
                             obs=current_obs,
                             measurement_operator = self.measurement_operator,
                             hyper_parameters = self.ensemble_method.hyperparameters,
-                            state_vector_variables = None, # maybe fix later? - currently don't have acces
+                            state_vector_variables = None, # maybe fix later? - currently don't have access
                             )
 
 
@@ -296,7 +302,7 @@ class Ensemble(BaseModel):
                    state_vector_variables: str | list | None,
                    ):
 
-        """" Similar to calling .. py:function:: Ensemble.update(assimilate=True)
+        """ Similar to calling .. py:function:: Ensemble.update(assimilate=True)
         Intended for advanced users!
         The assimilate class aims to make on the fly data assimilation possible.
         You only need to define which method, observations and H operator you wish to use.
@@ -342,9 +348,11 @@ class Ensemble(BaseModel):
 
         self.remove_negative()
 
+        self.config_specific_actions(pre_set_state=True)
+
         self.set_state_vector(self.ensemble_method.new_state_vectors)
 
-        self.config_specific_actions()
+        self.config_specific_actions(pre_set_state=False)
 
 
     def get_predicted_values(self, measurement_operator) -> np.ndarray:
@@ -373,7 +381,7 @@ class Ensemble(BaseModel):
         else:
             warnings.warn("More than 1 model type loaded, no non zero values removes",category=UserWarning)
 
-    def config_specific_actions(self):
+    def config_specific_actions(self, pre_set_state):
         """Function for actions which are specific to a combination of model with method.
 
             Note:
@@ -397,19 +405,25 @@ class Ensemble(BaseModel):
             # when dealing with lag this is difficult as we don't want it in the regular state vector
 
             if "HBV" in self.lst_models_name and len(self.lst_models_name) == 1:
-                # first get the memory vectors for all ensemble members
-                lag_vector_arr = np.zeros((len(self.ensemble_list),TLAG_MAX))
-                for index, ensemble_member in enumerate(self.ensemble_list):
-                    t_lag = int(ensemble_member.get_value("Tlag")[0])
-                    old_t_lag = np.array([ensemble_member.get_value(f"memory_vector{i}") for i in range(t_lag)]).flatten()
-                    lag_vector_arr[index,:t_lag] = old_t_lag
-                # resample so has the correct state
-                # TODO consider adding noise ?
-                new_lag_vector_lst = lag_vector_arr[self.ensemble_method.resample_indices]
+                if pre_set_state:
+                    # first get the memory vectors for all ensemble members
+                    lag_vector_arr = np.zeros((len(self.ensemble_list),TLAG_MAX))
+                    for index, ensemble_member in enumerate(self.ensemble_list):
+                        t_lag = int(ensemble_member.get_value("Tlag")[0])
+                        old_t_lag = np.array([ensemble_member.get_value(f"memory_vector{i}") for i in range(t_lag)]).flatten()
+                        lag_vector_arr[index,:t_lag] = old_t_lag
 
-                for index, ensembleMember in enumerate(self.ensemble_list):
-                    new_t_lag = ensembleMember.get_value(f"Tlag")
-                    [ensembleMember.set_value(f"memory_vector{mem_index}", np.array([new_lag_vector_lst[index, mem_index]])) for mem_index in range(int(new_t_lag))]
+                    self.config_specific_storage = lag_vector_arr
+
+                else:
+                    lag_vector_arr = self.config_specific_storage
+                    # resample so has the correct state
+                    # TODO consider adding noise ?
+                    new_lag_vector_lst = lag_vector_arr[self.ensemble_method.resample_indices]
+
+                    for index, ensembleMember in enumerate(self.ensemble_list):
+                        new_t_lag = ensembleMember.get_value(f"Tlag")
+                        [ensembleMember.set_value(f"memory_vector{mem_index}", np.array([new_lag_vector_lst[index, mem_index]])) for mem_index in range(int(new_t_lag))]
 
             elif "HBV" in self.lst_models_name:
                 warnings.warn(f"Models implemented:{self.lst_models_name}, could cause issues with particle filters"
@@ -425,15 +439,10 @@ class Ensemble(BaseModel):
         # infer shape of state vector:
         ref_model = self.ensemble_list[0]
         shape_data = ref_model.get_value(var_name).shape[0]
-        # shape_var = len(self.variable_names)
-
 
         output_array = np.zeros((self.N, shape_data))
 
         self.logger.append(f'{output_array.shape}')
-        # for i, ensemble_member in enumerate(self.ensemble_list):
-        #     output_array[i] = ensemble_member.model.get_value(var_name)
-        # return output_array
 
         gathered_get_value = (self.gather(*[self.get_value_parallel(self,var_name, i) for i in range(self.N)]))
 
@@ -455,11 +464,6 @@ class Ensemble(BaseModel):
             Note:
                 Assumes 1d array? although :obj:`np.vstack` does work for 2d arrays
         """
-        # collect state vector
-        # output_lst = []
-        # for ensemble_member in self.ensemble_list:
-        #     output_lst.append(ensemble_member.get_state_vector())
-
         gathered_get_state_vector = (self.gather(*[self.get_state_vector_parallel(self, i) for i in range(self.N)]))
 
         with dask.config.set(self.dask_config):
@@ -478,8 +482,6 @@ class Ensemble(BaseModel):
             args:
                 src (np.ndarray): size = number of ensemble members x 1 [N x 1]
         """
-        # for i, ensemble_member in enumerate(self.ensemble_list):
-        #     ensemble_member.model.set_value(var_name, src[i])
         gathered_set_value = (self.gather(*[self.set_value_parallel(self, var_name, src[i], i) for i in range(self.N)]))
 
         with dask.config.set(self.dask_config):
@@ -498,8 +500,6 @@ class Ensemble(BaseModel):
                 src (np.ndarray): size = number of ensemble members x number of states in state vector [N x len(z)]
                     src[0] should return the state vector for the first value
         """
-        # for i, ensemble_member in enumerate(self.ensemble_list):
-        #     ensemble_member.set_state_vector(src[i])
         gathered_set_state_vector = (self.gather(*[self.set_state_vector_parallel(self,src[i], i) for i in range(self.N)]))
 
         with dask.config.set(self.dask_config):

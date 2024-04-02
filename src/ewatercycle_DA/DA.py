@@ -28,13 +28,15 @@ from ewatercycle.base.forcing import DefaultForcing
 # saves users from encountering errors - change this to config file later?
 KNOWN_WORKING_MODELS_DA: list[str] = ["HBV", "Lorenz", "ParallelisationSleep"]
 KNOWN_WORKING_MODELS_DA_HYDROLOGY: list[str] = ["HBV"]
-
-LOADED_MODELS: dict[str, Any] = dict()
 TLAG_MAX = 100 # sets maximum lag possible (d)
-def load_models():
+
+
+def load_models(loaded_models) -> dict[str, Any]:
     """Loads models found in user install"""
     for model in ewatercycle.models.sources:
-        LOADED_MODELS.update({model: ewatercycle.models.sources[model]})
+        loaded_models.update({model: ewatercycle.models.sources[model]})
+    
+    return loaded_models
 
 class Ensemble(BaseModel):
     """Class for running data assimilation in eWaterCycle
@@ -90,7 +92,8 @@ class Ensemble(BaseModel):
     logger: list = [] # logging proved too complex for now so just append to list XD
     config_specific_storage: Any | None = None
 
-    load_models()
+    loaded_models: dict[str, Any] = dict()
+    loaded_models = load_models(loaded_models)
 
     def setup(self) -> None:
         """Creates a set of empty Ensemble member instances
@@ -125,6 +128,7 @@ class Ensemble(BaseModel):
                 ensemble_member.model_name = model_name
                 ensemble_member.forcing = forcing
                 ensemble_member.setup_kwargs = setup_kwargs
+                ensemble_member.loaded_models = self.loaded_models
 
         # more flexibility - could change in the future?
         elif type(model_name) == list and len(model_name) == self.N:
@@ -133,6 +137,7 @@ class Ensemble(BaseModel):
                 ensemble_member.model_name = model_name[index_m]
                 ensemble_member.forcing = forcing[index_m]
                 ensemble_member.setup_kwargs = setup_kwargs[index_m]
+                ensemble_member.loaded_models = self.loaded_models
         else:
             raise SyntaxWarning(f"model should either string or list of string of length {self.N}")
 
@@ -588,7 +593,7 @@ class EnsembleMember(BaseModel):
 
     def setup(self) -> None:
         """Setups the model provided with forcing and kwargs. Set the config file"""
-        self.model = LOADED_MODELS[self.model_name](forcing=self.forcing)
+        self.model = self.loaded_models[self.model_name](forcing=self.forcing)
         self.config, _ = self.model.setup(**self.setup_kwargs)
 
     def initialize(self) -> None:
@@ -669,7 +674,7 @@ class EnsembleMember(BaseModel):
 
     def verify_model_loaded(self) -> None:
         """Checks whether specified model is available."""
-        if self.model_name in LOADED_MODELS:
+        if self.model_name in self.loaded_models:
             pass
         else:
             raise UserWarning(f"Defined model: {self.model} not loaded")

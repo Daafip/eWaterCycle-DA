@@ -578,6 +578,8 @@ class EnsembleMember(BaseModel):
 
         variable_names (list[str]): list of string containing the variables in the state vector.
 
+        loaded_models (dict[str, Any]): dictionary containing model names and their corresponding instances
+
     """
 
     model_name: str | None = None
@@ -590,6 +592,7 @@ class EnsembleMember(BaseModel):
     config: Path | None = None
     state_vector: Any | None = None
     variable_names: list[str] | None = None
+    loaded_models: dict[str, Any] = dict()
 
     def setup(self) -> None:
         """Setups the model provided with forcing and kwargs. Set the config file"""

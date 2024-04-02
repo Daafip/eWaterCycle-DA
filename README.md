@@ -25,9 +25,11 @@ from ewatercycle_DA import DA
 ```
 
 
-## docs:
-Documenation can be found [here](https://ewatercycle-da.readthedocs.io/en/latest/)
+## docs
+Documentation can be found [here](https://ewatercycle-da.readthedocs.io/en/latest/)
 
+## Changelog
+Changelog can be found in [CHANGELOG.md](https://github.com/Daafip/ewatercycle-da/blob/main/CHANGELOG.md) on GitHub. 
 
 ## Quick Usage overiew
 _(maybe migrate this to docs?)_
@@ -72,8 +74,8 @@ ensemble.initialize_da_method(ensemble_method_name = "PF",
                                                'like_sigma_weights' : 0.05,
                                                'like_sigma_state_vector' : 0.01,
                                                  },
-                              
-                              state_vector_variables = "all", # the next three are keyword arguments but are needed. 
+                              state_vector_variables = "all", 
+                              # the next three are keyword arguments but are needed:
                               observation_path = ds_obs_dir,
                               observed_variable_name = "Q",
                               measurement_operator = H, 

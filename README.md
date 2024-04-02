@@ -11,13 +11,13 @@
 Code to run Data Assimilation with hydrological models on the [eWaterCycle](https://github.com/eWaterCycle/ewatercycle) platform. 
 
 ## Installation
-Install this package alongside your eWaterCycle installation
+Install this package alongside your [eWaterCycle installation](https://github.com/eWaterCycle/ewatercycle/blob/main/README.md#install)
 
 ```console
 pip install ewatercycle-DA
 ```
 
-Then HBV becomes available as one of the eWaterCycle models
+Then DA becomes available to be used in eWaterCycle
 
 ```python
 from ewatercycle_DA import DA

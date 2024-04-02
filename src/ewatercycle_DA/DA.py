@@ -21,17 +21,20 @@ from pathlib import Path
 from pydantic import BaseModel
 
 import ewatercycle
+import ewatercycle.models
+import ewatercycle.forcing
 from ewatercycle.base.forcing import DefaultForcing
-from ewatercycle.models import HBV, Lorenz
 
-LOADED_MODELS: dict[str, Any] = dict(
-                                        HBV=ewatercycle.models.HBV,
-                                        Lorenz = ewatercycle.models.Lorenz,
-                                        ParallelisationSleep = ewatercycle.models.ParallelisationSleep,
-                                     )
-LOADED_HYDROLOGY_MODELS: dict[str, Any] = dict(
-                                        HBV=ewatercycle.models.HBV)
+# saves users from encountering errors - change this to config file later?
+KNOWN_WORKING_MODELS_DA: list[str] = ["HBV", "Lorenz", "ParallelisationSleep"]
+KNOWN_WORKING_MODELS_DA_HYDROLOGY: list[str] = ["HBV"]
+
+LOADED_MODELS: dict[str, Any] = dict()
 TLAG_MAX = 100 # sets maximum lag possible (d)
+def load_models():
+    """Loads models found in user install"""
+    for model in ewatercycle.models.sources:
+        LOADED_MODELS.update({model: ewatercycle.models.sources[model]})
 
 class Ensemble(BaseModel):
     """Class for running data assimilation in eWaterCycle
@@ -86,6 +89,8 @@ class Ensemble(BaseModel):
     lst_models_name: list = []
     logger: list = [] # logging proved too complex for now so just append to list XD
     config_specific_storage: Any | None = None
+
+    load_models()
 
     def setup(self) -> None:
         """Creates a set of empty Ensemble member instances
@@ -249,7 +254,7 @@ class Ensemble(BaseModel):
         ensemble_member = ensemble.ensemble_list[i]
         ensemble_member.finalize()
 
-    def update(self, assimilate=True) -> None:
+    def update(self, assimilate=False) -> None:
         """Updates model for all members.
         Args:
             assimilate (bool): Whether to assimilate in a given timestep. True by default.
@@ -275,6 +280,9 @@ class Ensemble(BaseModel):
             gathered_update.compute()
 
         if assimilate:
+            if not all(model_name in KNOWN_WORKING_MODELS_DA for model_name in self.lst_models_name):
+                raise RuntimeWarning(f'Not all models specified {self.lst_models_name} are known to work with' \
+                                    +'Data Assimilation. Either specify model that does work or submit a PR to add it.')
             # get observations
             current_time = np.datetime64(self.ensemble_list[0].model.time_as_datetime)
             current_obs = self.observations.sel(time=current_time, method="nearest").values
@@ -375,11 +383,13 @@ class Ensemble(BaseModel):
     def remove_negative(self):
         """if only one model is loaded & hydrological: sets negative numbers to positive
            Other models such as the lorenz model can be negative"""
-        if len(self.lst_models_name) == 1 and self.lst_models_name[0] in LOADED_HYDROLOGY_MODELS:
+        # in future may be interesting to load multiple types of hydrological models in one ensemble
+        # for not not implemented
+        if len(self.lst_models_name) == 1 and self.lst_models_name[0] in KNOWN_WORKING_MODELS_DA_HYDROLOGY:
                 # set any values below 0 to small
                 self.ensemble_method.new_state_vectors[self.ensemble_method.new_state_vectors < 0] = 1e-6
         else:
-            warnings.warn("More than 1 model type loaded, no non zero values removes",category=UserWarning)
+            warnings.warn("More than 1 model type loaded, no non zero values removes",category=RuntimeWarning)
 
     def config_specific_actions(self, pre_set_state):
         """Function for actions which are specific to a combination of model with method.

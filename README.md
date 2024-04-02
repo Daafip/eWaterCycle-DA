@@ -25,9 +25,11 @@ from ewatercycle_DA import DA
 ```
 
 
-## docs:
-Documenation can be found [here](https://ewatercycle-da.readthedocs.io/en/latest/)
+## docs
+Documentation can be found [here](https://ewatercycle-da.readthedocs.io/en/latest/)
 
+## Changelog
+Changelog can be found in [CHANGELOG.md](https://github.com/Daafip/ewatercycle-da/blob/main/CHANGELOG.md) on GitHub. 
 
 ## Quick Usage overiew
 _(maybe migrate this to docs?)_

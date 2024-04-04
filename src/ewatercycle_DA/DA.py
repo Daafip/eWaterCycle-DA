@@ -20,22 +20,44 @@ from typing import Any, Optional
 from pathlib import Path
 from pydantic import BaseModel
 
+import os
+import sys
+file_dir = os.path.dirname(__file__)
+sys.path.append(file_dir)
+from lorenz import LorenzLocal
+
 import ewatercycle
 import ewatercycle.models
 import ewatercycle.forcing
 from ewatercycle.base.forcing import DefaultForcing
 
 # saves users from encountering errors - change this to config file later?
-KNOWN_WORKING_MODELS_DA: list[str] = ["HBV", "Lorenz", "ParallelisationSleep"]
+KNOWN_WORKING_MODELS_DA: list[str] = ["HBV", "Lorenz", "LorenzLocal", "ParallelisationSleep"]
 KNOWN_WORKING_MODELS_DA_HYDROLOGY: list[str] = ["HBV"]
 TLAG_MAX = 100 # sets maximum lag possible (d)
 
 
 def load_models(loaded_models) -> dict[str, Any]:
-    """Loads models found in user install"""
+    """Loads models found in user install
+
+    Note:
+        To load other local models:
+        .. code-block:: python
+
+           from ewatercycle_DA import DA
+           from model import LocalModel
+
+           ensemble = DA.Ensemble(N=100)
+           ensemble.loaded_models.update({'LocalModel':LocalModel})
+
+        The LorenzLocal model is only added in this way as it is likely useful to benchmark DA schemes.
+
+    """
     for model in ewatercycle.models.sources:
         loaded_models.update({model: ewatercycle.models.sources[model]})
-    
+
+    # append local models: can be done manually by user
+    loaded_models.update({"LorenzLocal":LorenzLocal})
     return loaded_models
 
 class Ensemble(BaseModel):
@@ -393,8 +415,12 @@ class Ensemble(BaseModel):
         if len(self.lst_models_name) == 1 and self.lst_models_name[0] in KNOWN_WORKING_MODELS_DA_HYDROLOGY:
                 # set any values below 0 to small
                 self.ensemble_method.new_state_vectors[self.ensemble_method.new_state_vectors < 0] = 1e-6
+
+        elif len(self.lst_models_name) == 1:
+            warnings.warn(f"Model {self.lst_models_name[0]} loaded not flagged as hydrological" \
+                          +"no negative values removed", category=UserWarning)
         else:
-            warnings.warn("More than 1 model type loaded, no non zero values removes",category=RuntimeWarning)
+            warnings.warn("More than 1 model type loaded, no negative values removed",category=RuntimeWarning)
 
     def config_specific_actions(self, pre_set_state):
         """Function for actions which are specific to a combination of model with method.
@@ -699,37 +725,44 @@ class ParticleFilter(BaseModel):
         Currently assumed 1D grid.
 
     Args:
+        N (int): Size of ensemble, passed down from DA.Ensemble().
+
+    Attributes:
         hyperparameters (dict): Combination of many different parameters:
                                 like_sigma_weights (float): scale/sigma of logpdf when generating particle weights
 
                                 like_sigma_state_vector (float): scale/sigma of noise added to each value in state vector
 
-    Attributes:
         obs (float): observation value of the current model timestep, set in due course thus optional
 
         state_vectors (np.ndarray): state vector per ensemble member [N x len(z)]
 
         predictions (np.ndarray): contains prior modeled values per ensemble member [N x 1]
 
+        new_state_vectors (np.ndarray): updated state vector per ensemble member [N x len(z)]
+
         weights (np.ndarray): contains weights per ensemble member per prior modeled values [N x 1]
 
         resample_indices (np.ndarray): contains indices of particles that are resampled [N x 1]
 
-        new_state_vectors (np.ndarray): updated state vector per ensemble member [N x len(z)]
 
     All are :obj:`None` by default
 
 
     """
-
-    hyperparameters: dict = dict(like_sigma_weights=0.05, like_sigma_state_vector=0.0005)
+    # args
     N: int
-    obs: float | Any | None = None
+
+    # required attributes
+    hyperparameters: dict = dict(like_sigma_weights=0.05, like_sigma_state_vector=0.0005)
+    obs: float | Any | None = None # TODO: refactor to np.ndarray
     state_vectors: Any | None = None
     predictions: Any | None = None
+    new_state_vectors: Any | None = None
+
+    # extra attributes
     weights: Any | None = None
     resample_indices: Any | None = None
-    new_state_vectors: Any | None = None
 
 
     def update(self):
@@ -748,9 +781,19 @@ class ParticleFilter(BaseModel):
 
             # for now just constant perturbation, can vary this hyperparameter
             like_sigma = self.hyperparameters['like_sigma_state_vector']
-            for index, row in enumerate(new_state_vectors_transpose):
-                row_with_noise = np.array([s + add_normal_noise(like_sigma)for s in row])
-                new_state_vectors_transpose[index] = row_with_noise
+            if type(like_sigma) is float:
+                for index, row in enumerate(new_state_vectors_transpose):
+                    row_with_noise = np.array([s + add_normal_noise(like_sigma) for s in row])
+                    new_state_vectors_transpose[index] = row_with_noise
+
+            elif type(like_sigma) is list and len(like_sigma) == len(new_state_vectors_transpose):
+                for index, row in enumerate(new_state_vectors_transpose):
+                    row_with_noise = np.array([s + add_normal_noise(like_sigma[index]) for s in row])
+                    new_state_vectors_transpose[index] = row_with_noise
+            else:
+                raise RuntimeWarning(f"{like_sigma} should be float or list of length {len(new_state_vectors_transpose)}")
+
+
 
             self.new_state_vectors = new_state_vectors_transpose.T # back to N x len(z) to be set correctly
 

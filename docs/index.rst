@@ -36,4 +36,5 @@ The added benefit of this model structure is that the package can also be used f
    example_HBV_model_PF_2
    example_HBV_model_EnKF
    example_Marrmot_Ensemble
+   user_guide_DA_scheme
 

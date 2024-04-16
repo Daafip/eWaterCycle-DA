@@ -12,6 +12,7 @@ import psutil
 
 import warnings
 import types
+
 from typing import Any, Optional
 from pathlib import Path
 from pydantic import BaseModel
@@ -21,6 +22,8 @@ import ewatercycle.models
 import ewatercycle.forcing
 from ewatercycle.base.forcing import DefaultForcing
 
+
+from ewatercycle_DA.utils import custom_make_cfg_dir
 from ewatercycle_DA.data_assimilation_schemes.PF import ParticleFilter
 from ewatercycle_DA.data_assimilation_schemes.EnKF import EnsembleKalmanFilter
 
@@ -132,7 +135,7 @@ class Ensemble(BaseModel):
         for ensemble_member in range(self.N):
             self.ensemble_list.append(EnsembleMember())
 
-    def initialize(self, model_name, forcing, setup_kwargs) -> None:
+    def initialize(self, model_name, forcing, setup_kwargs, custom_cfg_dir=True) -> None:
         """Takes empty Ensemble members and launches the model for given ensemble member
 
         Args:
@@ -145,6 +148,10 @@ class Ensemble(BaseModel):
             setup_kwargs (:obj:`dict` | :obj:`list`): kwargs dictionary which can be passed as `model.setup(**setup_kwargs)`.
                 UserWarning: Ensure your model saves all kwargs to the config
                 Should you want to vary initial parameters, again all should be a list
+
+            custom_cfg_dir (Bool) by default will create a custom config dir similar to original.
+
+            TODO: make it so custom config dir is emptied afterwards.
 
         Note:
             If you want to pass a list for any one variable, **all** others should be lists too of the same length.
@@ -170,7 +177,7 @@ class Ensemble(BaseModel):
             raise SyntaxWarning(f"model should either string or list of string of length {self.N}")
 
         # setup & initialize - same in both cases - in parallel
-        gathered_initialize = self.gather(*[self.initialize_parallel(self, i) for i in range(self.N)])
+        gathered_initialize = self.gather(*[self.initialize_parallel(self, i, custom_cfg_dir) for i in range(self.N)])
 
         with dask.config.set(self.dask_config):
             # starting too many dockers at once isn't great for the stability, limit to 1 for now
@@ -185,10 +192,14 @@ class Ensemble(BaseModel):
 
     @staticmethod
     @delayed
-    def initialize_parallel(ensemble, i):
+    def initialize_parallel(ensemble, i, model_name,custom_cfg_dir):
         ensemble_member = ensemble.ensemble_list[i]
         ensemble_member.verify_model_loaded()
-        ensemble_member.setup()
+        if custom_cfg_dir:
+            cfg_dir = custom_make_cfg_dir(ensemble_member.model_name[i], i)
+        else:
+            cfg_dir = None
+        ensemble_member.setup(cfg_dir=cfg_dir)
         ensemble_member.initialize()
         return ensemble_member.model_name
 
@@ -626,10 +637,10 @@ class EnsembleMember(BaseModel):
     variable_names: list[str] | None = None
     loaded_models: dict[str, Any] = dict()
 
-    def setup(self) -> None:
+    def setup(self, cfg_dir) -> None:
         """Setups the model provided with forcing and kwargs. Set the config file"""
         self.model = self.loaded_models[self.model_name](forcing=self.forcing)
-        self.config, _ = self.model.setup(**self.setup_kwargs)
+        self.config, _ = self.model.setup(cfg_dir=cfg_dir,**self.setup_kwargs)
 
     def initialize(self) -> None:
         """Initializes the model with the config file generated in setup"""
@@ -747,3 +758,5 @@ def validity_initialize_input(model_name, forcing, setup_kwargs) -> None:
         assert len(model_name) == len(setup_kwargs)
     except AssertionError:
         raise UserWarning("Length of lists: model_name, forcing & setup_kwargs should be the same length")
+
+

@@ -516,7 +516,7 @@ class Ensemble(BaseModel):
         with dask.config.set(self.dask_config):
             output_lst = gathered_get_state_vector.compute()
 
-        return np.array(output_lst) # N x len(z)
+        return np.vstack(output_lst) # N x len(z)
 
     @staticmethod
     @delayed

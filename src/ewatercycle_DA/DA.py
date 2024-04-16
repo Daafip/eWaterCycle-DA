@@ -516,7 +516,7 @@ class Ensemble(BaseModel):
         with dask.config.set(self.dask_config):
             output_lst = gathered_get_state_vector.compute()
 
-        return np.vstack(output_lst) # N x len(z)
+        return np.array(output_lst) # N x len(z)
 
     @staticmethod
     @delayed
@@ -699,7 +699,7 @@ class EnsembleMember(BaseModel):
         """
         for v_index, var_name in enumerate(self.variable_names):
             if type(src[v_index]) == float:
-                src[v_index] = np.array(src[v_index])
+                src[v_index] = np.array([src[v_index]])
             self.set_value(var_name, src[v_index])
 
     def finalize(self) -> None:

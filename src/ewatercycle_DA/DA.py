@@ -698,7 +698,9 @@ class EnsembleMember(BaseModel):
         Note: assumes a 1D grid currently as ``state_vector`` is 1D array.
         """
         for v_index, var_name in enumerate(self.variable_names):
-            self.set_value(var_name, np.array(src[v_index]))
+            if type(src[v_index]) == float:
+                src[v_index] = np.array(src[v_index])
+            self.set_value(var_name, src[v_index])
 
     def finalize(self) -> None:
         """"Finalizes the model: closing containers etc. if necessary"""

@@ -197,6 +197,7 @@ class Ensemble(BaseModel):
         ensemble_member.verify_model_loaded()
         if custom_cfg_dir:
             cfg_dir = custom_make_cfg_dir(ensemble_member.model_name, i)
+            ensemble_member.cfg_dir = cfg_dir
         else:
             cfg_dir = None
         ensemble_member.setup(cfg_dir=cfg_dir)
@@ -284,9 +285,15 @@ class Ensemble(BaseModel):
         ensemble_member.set_state_vector_variable()
 
 
-    def finalize(self) -> None:
-        """Runs finalize step for all members"""
-        gathered_finalize = (self.gather(*[self.finalize_parallel(self, i) for i in range(self.N)]))
+    def finalize(self, remove_config=True) -> None:
+        """Runs finalize step for all members
+
+        Optional Arg:
+            remove_config (Bool) = True: removes created config paths on finalizing by default.
+                set to false in case you wish to keep.
+
+        """
+        gathered_finalize = (self.gather(*[self.finalize_parallel(self, i, remove_config) for i in range(self.N)]))
 
         with dask.config.set(self.dask_config):
             gathered_finalize.compute()
@@ -294,9 +301,9 @@ class Ensemble(BaseModel):
     # TODO: think if this is a good idea
     @staticmethod
     @delayed
-    def finalize_parallel(ensemble, i):
+    def finalize_parallel(ensemble, i, remove_config):
         ensemble_member = ensemble.ensemble_list[i]
-        ensemble_member.finalize()
+        ensemble_member.finalize(remove_config)
 
     def update(self, assimilate=False) -> None:
         """Updates model for all members.
@@ -633,6 +640,7 @@ class EnsembleMember(BaseModel):
 
     model: Any | None = None
     config: Path | None = None
+    cfg_dir: Path | None = None
     state_vector: Any | None = None
     variable_names: list[str] | None = None
     loaded_models: dict[str, Any] = dict()
@@ -701,10 +709,7 @@ class EnsembleMember(BaseModel):
 
     def set_value(self, var_name: str, src: np.ndarray) -> None:
         """Sets current value of an ensemble member"""
-        if type(src) == float:
-            self.model.set_value(var_name, np.array([src]))
-        else:
-            self.model.set_value(var_name, src)
+        self.model.set_value(var_name, src)
 
     def set_state_vector(self,src: np.ndarray) -> None:
         """Sets current state vector of ensemble member
@@ -712,14 +717,15 @@ class EnsembleMember(BaseModel):
         Note: assumes a 1D grid currently as ``state_vector`` is 1D array.
         """
         for v_index, var_name in enumerate(self.variable_names):
-            if type(src[v_index]) == float:
-                self.set_value(var_name, np.array([src[v_index]]))
-            else:
-                self.set_value(var_name, src[v_index])
+            self.set_value(var_name, src[v_index])
 
-    def finalize(self) -> None:
+    def finalize(self, remove_config) -> None:
         """"Finalizes the model: closing containers etc. if necessary"""
         self.model.finalize()
+        if remove_config:
+            self.config.unlink()
+            self.cfg_dir.rmdir()
+
 
     def update(self) -> None:
         """Updates the model to the next timestep"""

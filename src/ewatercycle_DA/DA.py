@@ -639,7 +639,7 @@ class EnsembleMember(BaseModel):
     state_vector_variables: Optional[str | list] = None
 
     model: Any | None = None
-    config: Path | None = None
+    config: str | None = None
     cfg_dir: Path | None = None
     state_vector: Any | None = None
     variable_names: list[str] | None = None
@@ -723,7 +723,7 @@ class EnsembleMember(BaseModel):
         """"Finalizes the model: closing containers etc. if necessary"""
         self.model.finalize()
         if remove_config:
-            self.config.unlink()
+            Path(self.config).unlink()
             self.cfg_dir.rmdir()
 
 

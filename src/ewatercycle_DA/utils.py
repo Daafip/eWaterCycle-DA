@@ -25,12 +25,12 @@ def custom_make_cfg_dir(model_name, i) -> Path:
     https://github.com/Daafip/ewatercycle/blob/c7bc51dee4e7ea8b69f79710e5b80ef55067c3c1/src/ewatercycle/base/model.py#L121
     """
     tz = timezone.utc
-    timestamp = datetime.datetime.now(tz).strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.datetime.now(tz).strftime("%Y%m%d_%H%M")
     folder_prefix = model_name.lower()
     if i < 10:
         i = f'0{i}'
     cfg_path = to_absolute_path(
-        f"{folder_prefix}_{timestamp}_{i}", parent=CFG.output_dir
+        f"{folder_prefix}_{i}_{timestamp}", parent=CFG.output_dir
     )
 
     cfg_path.mkdir(parents=True, exist_ok=True)

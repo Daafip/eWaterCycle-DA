@@ -709,7 +709,7 @@ class EnsembleMember(BaseModel):
 
     def set_value(self, var_name: str, src: np.ndarray) -> None:
         """Sets current value of an ensemble member"""
-        self.model.set_value(var_name, src)
+        self.model.set_value(var_name, np.array([src]))
 
     def set_state_vector(self,src: np.ndarray) -> None:
         """Sets current state vector of ensemble member

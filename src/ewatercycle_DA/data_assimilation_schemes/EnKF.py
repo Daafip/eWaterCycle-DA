@@ -2,7 +2,7 @@ from typing import Any, Optional
 from pydantic import BaseModel
 import numpy as np
 
-from ewatercycle_DA.DA import add_normal_noise
+from ewatercycle_DA.utils import add_normal_noise
 
 class EnsembleKalmanFilter(BaseModel):
     """Implementation of an Ensemble Kalman filter scheme to be applied to the :py:class:`Ensemble`.

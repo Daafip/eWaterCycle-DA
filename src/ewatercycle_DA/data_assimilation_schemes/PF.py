@@ -5,8 +5,7 @@ import random
 import numpy as np
 import scipy
 
-from ewatercycle_DA.DA import add_normal_noise
-
+from ewatercycle_DA.utils import add_normal_noise
 class ParticleFilter(BaseModel):
     """Implementation of a particle filter scheme to be applied to the :py:class:`Ensemble`.
 

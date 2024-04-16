@@ -22,12 +22,12 @@ import ewatercycle.models
 import ewatercycle.forcing
 from ewatercycle.base.forcing import DefaultForcing
 
-# Load DA schemes
+# # Load DA schemes
 import os
 import sys
-for folders in ["local_models","data_assimilation_schems"]:
-    file_dir = os.path.dirname(Path(__file__) / folders)
-    sys.path.append(file_dir)
+# for folders in ["local_models","data_assimilation_schems"]:
+#     file_dir = os.path.dirname(Path(__file__) / folders)
+#     sys.path.append(file_dir)
 file_dir = os.path.dirname(__file__)
 sys.path.append(file_dir)
 
@@ -718,28 +718,6 @@ class EnsembleMember(BaseModel):
             pass
         else:
             raise UserWarning(f"Defined model: {self.model} not loaded")
-
-
-
-"""
-----------------------
-Utility based functions: also used by other scripts: DA schemes
-----------------------
-"""
-def add_normal_noise(like_sigma) -> float:
-    """Normal (zero-mean) noise to be added to a state
-
-    Args:
-        like_sigma (float): scale parameter - pseudo variance & thus 'like'-sigma
-
-    Returns:
-        sample from normal distribution
-    """
-    rng = np.random.default_rng()  # Initiate a Random Number Generator
-    return rng.normal(loc=0, scale=like_sigma)  # log normal so can't go to 0 ?
-
-
-
 
 """
 Check methods - could also be static methods but as load_methods needs to be here for now refactor later? 

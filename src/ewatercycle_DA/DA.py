@@ -196,7 +196,7 @@ class Ensemble(BaseModel):
         ensemble_member = ensemble.ensemble_list[i]
         ensemble_member.verify_model_loaded()
         if custom_cfg_dir:
-            cfg_dir = custom_make_cfg_dir(ensemble_member.model_name[i], i)
+            cfg_dir = custom_make_cfg_dir(ensemble_member.model_name, i)
         else:
             cfg_dir = None
         ensemble_member.setup(cfg_dir=cfg_dir)

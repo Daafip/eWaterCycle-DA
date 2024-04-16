@@ -642,7 +642,7 @@ class EnsembleMember(BaseModel):
                               +"Must be 'all' or list[str] containing wanted variables.")
 
         elif self.state_vector_variables == "all":
-            if self.model_name == "HBV":
+            if self.model_name == "HBV" or self.model_name == "HBVLocal":
                 self.variable_names = list(dict(self.model.parameters).keys()) \
                                       + list(dict(self.model.states).keys())   \
                                       + ["Q"]

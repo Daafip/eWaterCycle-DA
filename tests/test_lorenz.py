@@ -1,25 +1,24 @@
 # # test local version of the Lorenz models
-import importlib.util
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 from pathlib import Path
 import numpy as np
 import pandas as pd
 import xarray as xr
-import matplotlib.pyplot as plt
 from tqdm import tqdm
 from datetime import datetime
 
-def module_from_file(module_name, file_path):
-    spec = importlib.util.spec_from_file_location(module_name, file_path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
+# def module_from_file(module_name, file_path):
+#     spec = importlib.util.spec_from_file_location(module_name, file_path)
+#     module = importlib.util.module_from_spec(spec)
+#     spec.loader.exec_module(module)
+#     return module
 # load 
-DA = module_from_file("DA",r'../src/ewatercycle_DA/DA.py')
-lorenz = module_from_file("lorenz",r'../src/ewatercycle_DA/lorenz.py')
+# DA = module_from_file("DA",r'../src/ewatercycle_DA/DA.py')
+# lorenz = module_from_file("lorenz",r'../src/ewatercycle_DA/data_assimilation_schemes/lorenz.py')
+
+from ewatercycle_DA import DA
+from ewatercycle_DA.local_models import lorenz
 
 def main():
     # ## Create ensemble

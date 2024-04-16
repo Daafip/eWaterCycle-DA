@@ -702,8 +702,9 @@ class EnsembleMember(BaseModel):
     def set_value(self, var_name: str, src: np.ndarray) -> None:
         """Sets current value of an ensemble member"""
         if type(src) == float:
-            src = np.array([src])
-        self.model.set_value(var_name, src)
+            self.model.set_value(var_name, np.array([src]))
+        else:
+            self.model.set_value(var_name, src)
 
     def set_state_vector(self,src: np.ndarray) -> None:
         """Sets current state vector of ensemble member
@@ -712,8 +713,9 @@ class EnsembleMember(BaseModel):
         """
         for v_index, var_name in enumerate(self.variable_names):
             if type(src[v_index]) == float:
-                src[v_index] = np.array([src[v_index]])
-            self.set_value(var_name, src[v_index])
+                self.set_value(var_name, np.array([src[v_index]]))
+            else:
+                self.set_value(var_name, src[v_index])
 
     def finalize(self) -> None:
         """"Finalizes the model: closing containers etc. if necessary"""

@@ -725,11 +725,11 @@ class EnsembleMember(BaseModel):
         if remove_config:
             try:
                 Path(self.config).unlink()
-            except FileNotFoundError
+            except FileNotFoundError:
                 raise UserWarning(f"{self.config} not found")
             try:
                 self.cfg_dir.rmdir()
-            except FileNotFoundError
+            except FileNotFoundError:
                 raise UserWarning(f"{self.cfg_dir} not found")
 
     def update(self) -> None:

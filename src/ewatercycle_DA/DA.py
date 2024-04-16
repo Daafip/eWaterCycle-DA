@@ -192,7 +192,7 @@ class Ensemble(BaseModel):
 
     @staticmethod
     @delayed
-    def initialize_parallel(ensemble, i, model_name,custom_cfg_dir):
+    def initialize_parallel(ensemble, i, custom_cfg_dir):
         ensemble_member = ensemble.ensemble_list[i]
         ensemble_member.verify_model_loaded()
         if custom_cfg_dir:

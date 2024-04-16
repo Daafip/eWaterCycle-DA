@@ -723,9 +723,14 @@ class EnsembleMember(BaseModel):
         """"Finalizes the model: closing containers etc. if necessary"""
         self.model.finalize()
         if remove_config:
-            Path(self.config).unlink()
-            self.cfg_dir.rmdir()
-
+            try:
+                Path(self.config).unlink()
+            except FileNotFoundError
+                raise UserWarning(f"{self.config} not found")
+            try:
+                self.cfg_dir.rmdir()
+            except FileNotFoundError
+                raise UserWarning(f"{self.cfg_dir} not found")
 
     def update(self) -> None:
         """Updates the model to the next timestep"""

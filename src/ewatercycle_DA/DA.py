@@ -3,8 +3,6 @@
 Note:
     assumes a 1D grid currently (e.g. in ``get_state_vector``) - not yet tested on distributed models.
 """
-import warnings
-
 import numpy as np
 import xarray as xr
 
@@ -12,6 +10,7 @@ import dask
 from dask import delayed
 import psutil
 
+import warnings
 import types
 from typing import Any, Optional
 from pathlib import Path
@@ -22,29 +21,25 @@ import ewatercycle.models
 import ewatercycle.forcing
 from ewatercycle.base.forcing import DefaultForcing
 
-# # Load DA schemes
-import os
-import sys
-# for folders in ["local_models","data_assimilation_schems"]:
-#     file_dir = os.path.dirname(Path(__file__) / folders)
-#     sys.path.append(file_dir)
-file_dir = os.path.dirname(__file__)
-sys.path.append(file_dir)
-
 from ewatercycle_DA.data_assimilation_schemes.PF import ParticleFilter
 from ewatercycle_DA.data_assimilation_schemes.EnKF import EnsembleKalmanFilter
+
+from ewatercycle_DA.local_models.lorenz import LorenzLocal
 
 LOADED_METHODS: dict[str, Any] = dict(
                                         PF=ParticleFilter,
                                         EnKF=EnsembleKalmanFilter,
                                      )
 
-# load local models
-from ewatercycle_DA.local_models.lorenz import LorenzLocal
-
 # saves users from encountering errors - change this to config file later?
-KNOWN_WORKING_MODELS_DA: list[str] = ["HBV", "Lorenz", "LorenzLocal", "ParallelisationSleep"]
-KNOWN_WORKING_MODELS_DA_HYDROLOGY: list[str] = ["HBV"]
+KNOWN_WORKING_MODELS_DA: list[str] = ["HBV",
+                                      "HBVLocal",
+                                      "Lorenz",
+                                      "LorenzLocal",
+                                      "ParallelisationSleep"]
+
+KNOWN_WORKING_MODELS_DA_HYDROLOGY: list[str] = ["HBV",
+                                                "HBVLocal"]
 TLAG_MAX = 100 # sets maximum lag possible (d)
 
 

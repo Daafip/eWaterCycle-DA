@@ -769,7 +769,14 @@ class ParticleFilter(BaseModel):
         """Takes current state vectors of ensemble and returns updated state vectors ensemble
         """
         self.generate_weights()
-
+        # if np.isnan(self.weights).all():
+        #     like_sigma_original = self.hyperparameters['like_sigma_weights']
+        #     max_iter, i = 50, 1
+        #     while np.isnan(self.weights.mean()) and i < max_iter:
+        #         self.hyperparameters['like_sigma_weights'] *= 2
+        #         self.generate_weights()
+        #         i+=1
+        #     self.hyperparameters['like_sigma_weights'] = like_sigma_original
         # TODO: Refactor to be more modular i.e. remove if/else
 
         # 1d for now: weights is N x 1
@@ -811,9 +818,17 @@ class ParticleFilter(BaseModel):
 
             # for now just constant perturbation, can vary this hyperparameter
             like_sigma = self.hyperparameters['like_sigma_state_vector']
-            for index, row in enumerate(new_state_vectors_transpose):
-                row_with_noise = np.array([s + add_normal_noise(like_sigma) for s in row])
-                new_state_vectors_transpose[index] = row_with_noise
+            if type(like_sigma) is float:
+                for index, row in enumerate(new_state_vectors_transpose):
+                    row_with_noise = np.array([s + add_normal_noise(like_sigma) for s in row])
+                    new_state_vectors_transpose[index] = row_with_noise
+
+            elif type(like_sigma) is list and len(like_sigma) == len(new_state_vectors_transpose):
+                for index, row in enumerate(new_state_vectors_transpose):
+                    row_with_noise = np.array([s + add_normal_noise(like_sigma[index]) for s in row])
+                    new_state_vectors_transpose[index] = row_with_noise
+            else:
+                raise RuntimeWarning(f"{like_sigma} should be float or list of length {len(new_state_vectors_transpose)}")
 
             self.new_state_vectors = new_state_vectors_transpose.T  # back to N x len(z) to be set correctly
 
@@ -858,7 +873,7 @@ class EnsembleKalmanFilter(BaseModel):
 
     hyperparameters: dict = dict(like_sigma_state_vector=0.0005)
     N: int
-    obs: Optional[float | None] = None
+    obs: Optional[Any | None] = None # np.ndarray
     state_vectors: Optional[Any | None] = None
     predictions: Optional[Any | None] = None
     new_state_vectors: Optional[Any | None] = None
@@ -872,14 +887,14 @@ class EnsembleKalmanFilter(BaseModel):
         """
 
         # TODO: is obs are not float but array should be mXN, currently m = 1: E should be mxN, D should be m x N
-        measurement_d = self.obs
+        measurement_d = np.matrix(self.obs).T
 
-        measurement_pertubation_matrix_E = np.array([add_normal_noise(self.hyperparameters['like_sigma_state_vector']) for _ in range(self.N)])
+        measurement_pertubation_matrix_E = np.array([[add_normal_noise(self.hyperparameters['like_sigma_state_vector'])] * measurement_d.shape[0] for _ in range(self.N)]).T
 
-        peturbed_measurements_D = measurement_d * np.ones(self.N).T + np.sqrt(
+        peturbed_measurements_D = measurement_d * np.matrix(np.ones(self.N).T) + np.sqrt(
                                                                         self.N - 1) * measurement_pertubation_matrix_E
 
-        predicted_measurements_Ypsilon = self.predictions
+        predicted_measurements_Ypsilon = np.matrix(self.predictions).T
         prior_state_vector_Z = self.state_vectors.T
 
         PI = np.matrix((np.identity(self.N) - ((np.ones(self.N) @ np.ones(self.N).T) / self.N)) / (
@@ -890,13 +905,13 @@ class EnsembleKalmanFilter(BaseModel):
 
         E = np.matrix(peturbed_measurements_D) * PI
 
-        Y = np.matrix(predicted_measurements_Ypsilon).T * PI
+        Y = np.matrix(predicted_measurements_Ypsilon) * PI
         if prior_state_vector_Z.shape[0] < self.N - 1:
             Y = Y * A_cross_A
         S = Y
         self.logger.append(f'{peturbed_measurements_D.shape}, {predicted_measurements_Ypsilon.shape}')
 
-        D_tilde = np.matrix(peturbed_measurements_D - predicted_measurements_Ypsilon[0])
+        D_tilde = peturbed_measurements_D - predicted_measurements_Ypsilon
 
         self.logger.append(f'PI{PI.shape},E{E.shape}, Y{Y.shape}, D_tilde{D_tilde.shape}')
         W = (S.T * np.linalg.inv(S * S.T + E * E.T)) * D_tilde

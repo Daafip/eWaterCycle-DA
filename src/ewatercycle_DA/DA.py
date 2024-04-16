@@ -690,6 +690,8 @@ class EnsembleMember(BaseModel):
 
     def set_value(self, var_name: str, src: np.ndarray) -> None:
         """Sets current value of an ensemble member"""
+        if type(src) == float:
+            src = np.array([src])
         self.model.set_value(var_name, src)
 
     def set_state_vector(self,src: np.ndarray) -> None:

@@ -15,3 +15,6 @@ _(forgot to tag this properly so its under the tag v0.0.1)_
 - Seperate list `KNOWN_WORKING_MODELS_DA` check whether to continue with assimilating.
 - small change to `config_specific_actions`, but this is a WIP 
 
+#### v0.0.4
+- Restructuring package: now seperate files for classes which user will edit
+

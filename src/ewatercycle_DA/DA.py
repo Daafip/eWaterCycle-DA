@@ -726,11 +726,11 @@ class EnsembleMember(BaseModel):
             try:
                 Path(self.config).unlink()
             except FileNotFoundError:
-                raise UserWarning(f"{self.config} not found")
+                warnings.warn(message=f"{self.config} not found", category=UserWarning)
             try:
                 self.cfg_dir.rmdir()
             except FileNotFoundError:
-                raise UserWarning(f"{self.cfg_dir} not found")
+                warnings.warn(f"{self.cfg_dir} not found", category=UserWarning)
 
     def update(self) -> None:
         """Updates the model to the next timestep"""

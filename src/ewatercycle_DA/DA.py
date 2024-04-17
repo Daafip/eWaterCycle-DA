@@ -463,13 +463,14 @@ class Ensemble(BaseModel):
 
 
         """
-
+        # TODO: Refactor so BMI handles this
         #1
         if self.ensemble_method_name == "PF":
             # in particle filter the whole particle needs to be copied
             # when dealing with lag this is difficult as we don't want it in the regular state vector
-
-            if "HBV" in self.lst_models_name and len(self.lst_models_name) == 1:
+            hbv_model = "HBV" in self.lst_models_name
+            hbv_local_model = "HBVLocal" in self.lst_models_name
+            if (hbv_model or hbv_local_model) and len(self.lst_models_name) == 1:
                 if pre_set_state:
                     # first get the memory vectors for all ensemble members
                     lag_vector_arr = np.zeros((len(self.ensemble_list),TLAG_MAX))
@@ -490,7 +491,7 @@ class Ensemble(BaseModel):
                         new_t_lag = ensembleMember.get_value(f"Tlag")
                         [ensembleMember.set_value(f"memory_vector{mem_index}", np.array([new_lag_vector_lst[index, mem_index]])) for mem_index in range(int(new_t_lag))]
 
-            elif "HBV" in self.lst_models_name:
+            elif hbv_model or hbv_local_model:
                 warnings.warn(f"Models implemented:{self.lst_models_name}, could cause issues with particle filters"
                               'HBV needs to update the lag vector but cannot due to other model type(s)',
                               category=RuntimeWarning)

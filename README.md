@@ -46,7 +46,7 @@ ensemble = DA.Ensemble(N=10)
 ensemble.setup()
 
 ensemble.initialize(model_name="HBV",
-                   forcing=HBVForcing
+                   forcing=HBVForcing,
                    setup_kwargs={'parameters':'7.6,0.5,460,3.8,0.19,1.3,0.082,0.0061',
                                  'initial_storage':'0,100,0,5'}
                     )
@@ -63,12 +63,14 @@ _For running HBV see seperate [docs](https://github.com/Daafip/ewatercycle-hbv)_
 
 ```py
 
+...
+ref_model = ...
 #... same as above just add two more definitions
 def H(Z):
     """returns discharge which is the last value on the state vector for HBV"""
     return Z[-1] 
 
-
+ds_obs_dir = ...
 ensemble.initialize_da_method(ensemble_method_name = "PF", 
                               hyper_parameters = {
                                                'like_sigma_weights' : 0.05,

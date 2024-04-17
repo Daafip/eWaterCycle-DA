@@ -3,11 +3,6 @@
 Note:
     assumes a 1D grid currently (e.g. in ``get_state_vector``) - not yet tested on distributed models.
 """
-
-import random
-import warnings
-
-import scipy
 import numpy as np
 import xarray as xr
 
@@ -15,25 +10,39 @@ import dask
 from dask import delayed
 import psutil
 
+import warnings
 import types
+
 from typing import Any, Optional
 from pathlib import Path
 from pydantic import BaseModel
-
-import os
-import sys
-file_dir = os.path.dirname(__file__)
-sys.path.append(file_dir)
-from lorenz import LorenzLocal
 
 import ewatercycle
 import ewatercycle.models
 import ewatercycle.forcing
 from ewatercycle.base.forcing import DefaultForcing
 
+
+from ewatercycle_DA.utils import custom_make_cfg_dir
+from ewatercycle_DA.data_assimilation_schemes.PF import ParticleFilter
+from ewatercycle_DA.data_assimilation_schemes.EnKF import EnsembleKalmanFilter
+
+from ewatercycle_DA.local_models.lorenz import LorenzLocal
+
+LOADED_METHODS: dict[str, Any] = dict(
+                                        PF=ParticleFilter,
+                                        EnKF=EnsembleKalmanFilter,
+                                     )
+
 # saves users from encountering errors - change this to config file later?
-KNOWN_WORKING_MODELS_DA: list[str] = ["HBV", "Lorenz", "LorenzLocal", "ParallelisationSleep"]
-KNOWN_WORKING_MODELS_DA_HYDROLOGY: list[str] = ["HBV"]
+KNOWN_WORKING_MODELS_DA: list[str] = ["HBV",
+                                      "HBVLocal",
+                                      "Lorenz",
+                                      "LorenzLocal",
+                                      "ParallelisationSleep"]
+
+KNOWN_WORKING_MODELS_DA_HYDROLOGY: list[str] = ["HBV",
+                                                "HBVLocal"]
 TLAG_MAX = 100 # sets maximum lag possible (d)
 
 
@@ -126,7 +135,7 @@ class Ensemble(BaseModel):
         for ensemble_member in range(self.N):
             self.ensemble_list.append(EnsembleMember())
 
-    def initialize(self, model_name, forcing, setup_kwargs) -> None:
+    def initialize(self, model_name, forcing, setup_kwargs, custom_cfg_dir=True) -> None:
         """Takes empty Ensemble members and launches the model for given ensemble member
 
         Args:
@@ -139,6 +148,10 @@ class Ensemble(BaseModel):
             setup_kwargs (:obj:`dict` | :obj:`list`): kwargs dictionary which can be passed as `model.setup(**setup_kwargs)`.
                 UserWarning: Ensure your model saves all kwargs to the config
                 Should you want to vary initial parameters, again all should be a list
+
+            custom_cfg_dir (Bool) by default will create a custom config dir similar to original.
+
+            TODO: make it so custom config dir is emptied afterwards.
 
         Note:
             If you want to pass a list for any one variable, **all** others should be lists too of the same length.
@@ -164,7 +177,7 @@ class Ensemble(BaseModel):
             raise SyntaxWarning(f"model should either string or list of string of length {self.N}")
 
         # setup & initialize - same in both cases - in parallel
-        gathered_initialize = self.gather(*[self.initialize_parallel(self, i) for i in range(self.N)])
+        gathered_initialize = self.gather(*[self.initialize_parallel(self, i, custom_cfg_dir) for i in range(self.N)])
 
         with dask.config.set(self.dask_config):
             # starting too many dockers at once isn't great for the stability, limit to 1 for now
@@ -179,10 +192,15 @@ class Ensemble(BaseModel):
 
     @staticmethod
     @delayed
-    def initialize_parallel(ensemble, i):
+    def initialize_parallel(ensemble, i, custom_cfg_dir):
         ensemble_member = ensemble.ensemble_list[i]
         ensemble_member.verify_model_loaded()
-        ensemble_member.setup()
+        if custom_cfg_dir:
+            cfg_dir = custom_make_cfg_dir(ensemble_member.model_name, i)
+            ensemble_member.cfg_dir = cfg_dir
+        else:
+            cfg_dir = None
+        ensemble_member.setup(cfg_dir=cfg_dir)
         ensemble_member.initialize()
         return ensemble_member.model_name
 
@@ -267,9 +285,15 @@ class Ensemble(BaseModel):
         ensemble_member.set_state_vector_variable()
 
 
-    def finalize(self) -> None:
-        """Runs finalize step for all members"""
-        gathered_finalize = (self.gather(*[self.finalize_parallel(self, i) for i in range(self.N)]))
+    def finalize(self, remove_config=True) -> None:
+        """Runs finalize step for all members
+
+        Optional Arg:
+            remove_config (Bool) = True: removes created config paths on finalizing by default.
+                set to false in case you wish to keep.
+
+        """
+        gathered_finalize = (self.gather(*[self.finalize_parallel(self, i, remove_config) for i in range(self.N)]))
 
         with dask.config.set(self.dask_config):
             gathered_finalize.compute()
@@ -277,9 +301,9 @@ class Ensemble(BaseModel):
     # TODO: think if this is a good idea
     @staticmethod
     @delayed
-    def finalize_parallel(ensemble, i):
+    def finalize_parallel(ensemble, i, remove_config):
         ensemble_member = ensemble.ensemble_list[i]
-        ensemble_member.finalize()
+        ensemble_member.finalize(remove_config)
 
     def update(self, assimilate=False) -> None:
         """Updates model for all members.
@@ -615,15 +639,16 @@ class EnsembleMember(BaseModel):
     state_vector_variables: Optional[str | list] = None
 
     model: Any | None = None
-    config: Path | None = None
+    config: str | None = None
+    cfg_dir: Path | None = None
     state_vector: Any | None = None
     variable_names: list[str] | None = None
     loaded_models: dict[str, Any] = dict()
 
-    def setup(self) -> None:
+    def setup(self, cfg_dir) -> None:
         """Setups the model provided with forcing and kwargs. Set the config file"""
         self.model = self.loaded_models[self.model_name](forcing=self.forcing)
-        self.config, _ = self.model.setup(**self.setup_kwargs)
+        self.config, _ = self.model.setup(cfg_dir=cfg_dir,**self.setup_kwargs)
 
     def initialize(self) -> None:
         """Initializes the model with the config file generated in setup"""
@@ -636,7 +661,7 @@ class EnsembleMember(BaseModel):
                               +"Must be 'all' or list[str] containing wanted variables.")
 
         elif self.state_vector_variables == "all":
-            if self.model_name == "HBV":
+            if self.model_name == "HBV" or self.model_name == "HBVLocal":
                 self.variable_names = list(dict(self.model.parameters).keys()) \
                                       + list(dict(self.model.states).keys())   \
                                       + ["Q"]
@@ -684,18 +709,28 @@ class EnsembleMember(BaseModel):
 
     def set_value(self, var_name: str, src: np.ndarray) -> None:
         """Sets current value of an ensemble member"""
-        self.model.set_value(var_name, src)
+        self.model.set_value(var_name, np.array([src]))
 
     def set_state_vector(self,src: np.ndarray) -> None:
         """Sets current state vector of ensemble member
+        TODO: check this
         Note: assumes a 1D grid currently as ``state_vector`` is 1D array.
         """
         for v_index, var_name in enumerate(self.variable_names):
             self.set_value(var_name, src[v_index])
 
-    def finalize(self) -> None:
+    def finalize(self, remove_config) -> None:
         """"Finalizes the model: closing containers etc. if necessary"""
         self.model.finalize()
+        if remove_config:
+            try:
+                Path(self.config).unlink()
+            except FileNotFoundError:
+                raise UserWarning(f"{self.config} not found")
+            try:
+                self.cfg_dir.rmdir()
+            except FileNotFoundError:
+                raise UserWarning(f"{self.cfg_dir} not found")
 
     def update(self) -> None:
         """Updates the model to the next timestep"""
@@ -708,227 +743,6 @@ class EnsembleMember(BaseModel):
         else:
             raise UserWarning(f"Defined model: {self.model} not loaded")
 
-
-"""
-Data assimilation methods
-----------------------
-"""
-
-
-
-class ParticleFilter(BaseModel):
-    """Implementation of a particle filter scheme to be applied to the :py:class:`Ensemble`.
-
-    note:
-        The :py:class:`ParticleFilter` is controlled by the :py:class:`Ensemble` and thus has no time reference itself.
-        No DA method should need to know where in time it is (for now).
-        Currently assumed 1D grid.
-
-    Args:
-        N (int): Size of ensemble, passed down from DA.Ensemble().
-
-    Attributes:
-        hyperparameters (dict): Combination of many different parameters:
-                                like_sigma_weights (float): scale/sigma of logpdf when generating particle weights
-
-                                like_sigma_state_vector (float): scale/sigma of noise added to each value in state vector
-
-        obs (float): observation value of the current model timestep, set in due course thus optional
-
-        state_vectors (np.ndarray): state vector per ensemble member [N x len(z)]
-
-        predictions (np.ndarray): contains prior modeled values per ensemble member [N x 1]
-
-        new_state_vectors (np.ndarray): updated state vector per ensemble member [N x len(z)]
-
-        weights (np.ndarray): contains weights per ensemble member per prior modeled values [N x 1]
-
-        resample_indices (np.ndarray): contains indices of particles that are resampled [N x 1]
-
-
-    All are :obj:`None` by default
-
-
-    """
-    # args
-    N: int
-
-    # required attributes
-    hyperparameters: dict = dict(like_sigma_weights=0.05, like_sigma_state_vector=0.0005)
-    obs: float | Any | None = None # TODO: refactor to np.ndarray
-    state_vectors: Any | None = None
-    predictions: Any | None = None
-    new_state_vectors: Any | None = None
-
-    # extra attributes
-    weights: Any | None = None
-    resample_indices: Any | None = None
-
-
-    def update(self):
-        """Takes current state vectors of ensemble and returns updated state vectors ensemble
-        """
-        self.generate_weights()
-
-        # TODO: Refactor to be more modular i.e. remove if/else
-
-        # 1d for now: weights is N x 1
-        if self.weights[0].size == 1:
-            self.resample_indices = random.choices(population=np.arange(self.N), weights=self.weights, k=self.N)
-
-            new_state_vectors = self.state_vectors.copy()[self.resample_indices]
-            new_state_vectors_transpose = new_state_vectors.T # change to len(z) x N so in future you can vary sigma
-
-            # for now just constant perturbation, can vary this hyperparameter
-            like_sigma = self.hyperparameters['like_sigma_state_vector']
-            if type(like_sigma) is float:
-                for index, row in enumerate(new_state_vectors_transpose):
-                    row_with_noise = np.array([s + add_normal_noise(like_sigma) for s in row])
-                    new_state_vectors_transpose[index] = row_with_noise
-
-            elif type(like_sigma) is list and len(like_sigma) == len(new_state_vectors_transpose):
-                for index, row in enumerate(new_state_vectors_transpose):
-                    row_with_noise = np.array([s + add_normal_noise(like_sigma[index]) for s in row])
-                    new_state_vectors_transpose[index] = row_with_noise
-            else:
-                raise RuntimeWarning(f"{like_sigma} should be float or list of length {len(new_state_vectors_transpose)}")
-
-
-
-            self.new_state_vectors = new_state_vectors_transpose.T # back to N x len(z) to be set correctly
-
-        # 2d weights is N x len(z)
-        else:
-            # handel each row separately:
-            self.resample_indices = []
-            for i in range(len(self.weights[0])):
-                 self.resample_indices.append(random.choices(population=np.arange(self.N), weights=self.weights[:, i], k=self.N))
-            self.resample_indices = np.vstack(self.resample_indices)
-
-            new_state_vectors_transpose = self.state_vectors.copy().T
-            for index, indices in enumerate(self.resample_indices):
-                new_state_vectors_transpose[index] = new_state_vectors_transpose[index, indices]
-
-            # for now just constant perturbation, can vary this hyperparameter
-            like_sigma = self.hyperparameters['like_sigma_state_vector']
-            for index, row in enumerate(new_state_vectors_transpose):
-                row_with_noise = np.array([s + add_normal_noise(like_sigma) for s in row])
-                new_state_vectors_transpose[index] = row_with_noise
-
-            self.new_state_vectors = new_state_vectors_transpose.T  # back to N x len(z) to be set correctly
-
-
-
-    def generate_weights(self):
-        """Takes the ensemble and observations and returns the posterior"""
-
-        like_sigma = self.hyperparameters['like_sigma_weights']
-        difference = (self.obs - self.predictions)
-        unnormalised_log_weights = scipy.stats.norm.logpdf(difference, loc=0, scale=like_sigma)
-        normalised_weights = np.exp(unnormalised_log_weights - scipy.special.logsumexp(unnormalised_log_weights))
-
-        self.weights = normalised_weights
-
-
-class EnsembleKalmanFilter(BaseModel):
-    """Implementation of an Ensemble Kalman filter scheme to be applied to the :py:class:`Ensemble`.
-
-    note:
-        The :py:class:`EnsembleKalmanFilter` is controlled by the :py:class:`Ensemble` and thus has no time reference itself.
-        No DA method should need to know where in time it is (for now).
-        Currently assumed 1D grid.
-
-    Args:
-        hyperparameters (dict): Combination of many different parameters:
-                                like_sigma_weights (float): scale/sigma of logpdf when generating particle weights
-
-                                like_sigma_state_vector (float): scale/sigma of noise added to each value in state vector
-
-    Attributes:
-        obs (float): observation value of the current model timestep, set in due course thus optional
-
-        state_vectors (np.ndarray): state vector per ensemble member [N x len(z)]
-
-        predictions (np.ndarray): contains prior modeled values per ensemble member [N x 1]
-
-        new_state_vectors (np.ndarray): updated state vector per ensemble member [N x len(z)]
-
-        All are :obj:`None` by default
-    """
-
-    hyperparameters: dict = dict(like_sigma_state_vector=0.0005)
-    N: int
-    obs: Optional[float | None] = None
-    state_vectors: Optional[Any | None] = None
-    predictions: Optional[Any | None] = None
-    new_state_vectors: Optional[Any | None] = None
-    logger: list = [] # easier than using built in logger ?
-
-
-    def update(self):
-        """Takes current state vectors of ensemble and returns updated state vectors ensemble
-
-        TODO: refactor to be more readable
-        """
-
-        # TODO: is obs are not float but array should be mXN, currently m = 1: E should be mxN, D should be m x N
-        measurement_d = self.obs
-
-        measurement_pertubation_matrix_E = np.array([add_normal_noise(self.hyperparameters['like_sigma_state_vector']) for _ in range(self.N)])
-
-        peturbed_measurements_D = measurement_d * np.ones(self.N).T + np.sqrt(
-                                                                        self.N - 1) * measurement_pertubation_matrix_E
-
-        predicted_measurements_Ypsilon = self.predictions
-        prior_state_vector_Z = self.state_vectors.T
-
-        PI = np.matrix((np.identity(self.N) - ((np.ones(self.N) @ np.ones(self.N).T) / self.N)) / (
-            np.sqrt(self.N - 1)))
-        A_cross_A = np.matrix(
-            (np.identity(self.N) - ((np.ones(self.N) @ np.ones(self.N).T) / self.N)))
-
-
-        E = np.matrix(peturbed_measurements_D) * PI
-
-        Y = np.matrix(predicted_measurements_Ypsilon).T * PI
-        if prior_state_vector_Z.shape[0] < self.N - 1:
-            Y = Y * A_cross_A
-        S = Y
-        self.logger.append(f'{peturbed_measurements_D.shape}, {predicted_measurements_Ypsilon.shape}')
-
-        D_tilde = np.matrix(peturbed_measurements_D - predicted_measurements_Ypsilon[0])
-
-        self.logger.append(f'PI{PI.shape},E{E.shape}, Y{Y.shape}, D_tilde{D_tilde.shape}')
-        W = (S.T * np.linalg.inv(S * S.T + E * E.T)) * D_tilde
-        T = np.identity(self.N) + (W / np.sqrt(self.N - 1))
-
-
-
-        self.new_state_vectors = np.array((prior_state_vector_Z * T).T) # back to N x len(z) to be set correctly
-
-
-
-"""
-Utility based functions
-----------------------
-"""
-
-rng = np.random.default_rng() # Initiate a Random Number Generator
-def add_normal_noise(like_sigma) -> float:
-    """Normal (zero-mean) noise to be added to a state
-
-    Args:
-        like_sigma (float): scale parameter - pseudo variance & thus 'like'-sigma
-
-    Returns:
-        sample from normal distribution
-    """
-    return rng.normal(loc=0, scale=like_sigma)  # log normal so can't go to 0 ?
-
-
-
-
-
 """
 Check methods - could also be static methods but as load_methods needs to be here for now refactor later? 
 _____________
@@ -937,10 +751,6 @@ _____________
 
 """
 
-LOADED_METHODS: dict[str, Any] = dict(
-                                        PF=ParticleFilter,
-                                        EnKF=EnsembleKalmanFilter,
-                                     )
 def validate_method(method):
     """"Checks uses supplied method to ensure """
     try:
@@ -961,3 +771,5 @@ def validity_initialize_input(model_name, forcing, setup_kwargs) -> None:
         assert len(model_name) == len(setup_kwargs)
     except AssertionError:
         raise UserWarning("Length of lists: model_name, forcing & setup_kwargs should be the same length")
+
+

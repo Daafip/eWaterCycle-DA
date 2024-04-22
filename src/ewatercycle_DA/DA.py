@@ -75,8 +75,6 @@ class Ensemble(BaseModel):
     Args:
         N : Number of ensemble members
 
-        location : Where the model is run, by default local - change to remote later
-
         dask_config: Dictionary to pass to .. :py:`dask.config.set()`
                     see `dask docs <https://docs.dask.org/en/stable/scheduler-overview.html>`_
                     Will default to same number of workers and physical processors.
@@ -109,7 +107,6 @@ class Ensemble(BaseModel):
     """
 
     N: int
-    location: str = "local"
     dask_config: dict = {"multiprocessing.context": "spawn",
                          'num_workers': psutil.cpu_count(logical=False)}
 
@@ -134,6 +131,94 @@ class Ensemble(BaseModel):
             self.ensemble_list = []
         for ensemble_member in range(self.N):
             self.ensemble_list.append(EnsembleMember())
+
+    def generate_forcing(self,
+             forcing_class: list[Any] | Any,
+             list_forcing_args: list[dict],
+                         ) -> list[Any]:
+        """Generates forcing in parallel.
+
+        Args:
+            forcing_class (list | Any): (list of) forcing class instance(s). If only
+                one is specified, will pass the different args to same class.
+
+            list_forcing_args (list[dict]): list of arguments to be passed to the
+                forcing class(es), should al be different.
+
+        Example:
+            e.g. to investigate the impact of varying a parameter:
+
+            .. code-block:: python
+
+                ensemble = DA.Ensemble(N=n_particles)
+                ensemble.setup()
+
+                experiment_start_date = "1997-08-01T00:00:00Z"
+                experiment_end_date = "1999-03-01T00:00:00Z"
+                HRU_id = 14138900
+
+                forcing_args = []
+                for i in range(1,11):
+                    forcing_args.append(dict(
+                        start_time = experiment_start_date,
+                        end_time = experiment_end_date,
+                        directory = forcing_path,
+                        camels_file = f'0{HRU_id}_lump_cida_forcing_leap.txt',
+                        alpha = 1.23 + (i/100)
+                                             )
+                                        )
+                import ewatercycle.forcing
+                ensemble.generate_forcing(ewatercycle.forcing.sources.HBVForcing,
+                                              forcing_args
+                                             )
+            This returns 10 different forcing objects in a list which can be passed
+            to ensemble.initialize
+        """
+        self.check_forcing_input(forcing_class, list_forcing_args)
+        if type(forcing_class) == list:
+            gathered_generate_forcing = (self.gather(
+                *[self.generate_forcing_parallel(forcing_class[i],
+                                                  list_forcing_args[i]
+                                                  )
+                                                  for i in range(self.N)]))
+        else:
+            gathered_generate_forcing = (self.gather(
+                *[self.generate_forcing_parallel(forcing_class,
+                                                  list_forcing_args[i]
+                                                  )
+                                                  for i in range(self.N)]))
+
+        with dask.config.set(self.dask_config):
+            forcing_objs = gathered_generate_forcing.compute()
+
+        return forcing_objs
+
+
+    def check_forcing_input(self, forcing_class, list_forcing_args) -> None:
+        """Check user input for forcing is correct"""
+        if type(forcing_class) == list:
+            try:
+                assert len(forcing_class) == len(list_forcing_args)
+                assert len(forcing_class) == self.N
+            except AssertionError:
+                msg = ("Both supplied lists should be of same length & match "
+                       "the ensemble length"
+                       )
+                raise RuntimeError(msg)
+        else:
+            try:
+                assert len(list_forcing_args) == self.N
+            except AssertionError:
+                msg = "Both supplied list should be of same length as ensemble size"
+                raise RuntimeError(msg)
+
+    @staticmethod
+    @delayed
+    def generate_forcing_parallel(forcing, forcing_args):
+        """Generate forcing given obj & args (with dask)."""
+        forcing_obj = forcing(**forcing_args)
+        return forcing_obj
+
 
     def initialize(self, model_name, forcing, setup_kwargs, custom_cfg_dir=True) -> None:
         """Takes empty Ensemble members and launches the model for given ensemble member

@@ -17,4 +17,5 @@ _(forgot to tag this properly so its under the tag v0.0.1)_
 
 #### v0.0.4
 - Restructuring package: now seperate files for classes which user will edit
-
+#### v0.0.5
+- Adding generate forcing

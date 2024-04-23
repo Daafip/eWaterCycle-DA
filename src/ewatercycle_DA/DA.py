@@ -349,18 +349,48 @@ class Ensemble(BaseModel):
         self.ensemble_method.N = self.N
 
         # TODO currently assumes state vector variables is the same for all ensemble members
-        # TODO should also be list
-        gathered_initialize_da_method = (self.gather(*[self.initialize_da_method_parallel(self, state_vector_variables, i)
-                                                      for i in range(self.N)]))
-
-        with dask.config.set(self.dask_config):
-            gathered_initialize_da_method.compute()
+        # TODO could also be list
+        self.set_state_vector_variables(state_vector_variables)
 
         # only set if specified
         if not None in [observed_variable_name, observation_path, measurement_operator]:
             self.observed_variable_name = observed_variable_name
-            self.observations = self.load_netcdf(observation_path, observed_variable_name)
+            self.observations = self.load_netcdf(observation_path,
+                                                 observed_variable_name)
             self.measurement_operator = measurement_operator
+
+    def set_state_vector_variables(self, state_vector_variables: str | list):
+        """Sets state vector variables
+
+        Called by `Ensemble.initialize_da_method`, but can also be called by user
+        to set up get & set state vector if DA is not used.
+
+        Args:
+            state_vector_variables (Optional[str | :obj:`list[str]`]): can be set to
+                'all' for known parameters, this is highly model and scenario specific
+                 & should be implemented separately. Currently known to work for:
+
+                 - ewatercycle-HBV
+                 - ...
+
+                Can be a set by passing a list containing strings of variable to
+                include in the state vector.
+
+                Changing to a subset allows you to do interesting things with ensembles:
+                mainly limited to particle filters.
+
+                For example giving half the particle filters more variables
+                which vary than others - see what that does.
+
+        """
+        gathered_set_state_vect = self.gather(
+            *[self.initialize_da_method_parallel(self, state_vector_variables, i)
+                                                      for i in range(self.N)]
+                                                )
+
+        with dask.config.set(self.dask_config):
+            gathered_set_state_vect.compute()
+
 
     @staticmethod
     @delayed
@@ -779,7 +809,11 @@ class EnsembleMember(BaseModel):
         """
         # infer shape of state vector:
         if self.variable_names is None:
-            raise UserWarning(f'First set variable names through `initialize_da_method`')
+            msg = (
+                'First set variable names through `ensemble.initialize_da_method`'
+                'if DA is not used, then through `ensemble.set_state_vector_variables`'
+            )
+            raise UserWarning(msg)
 
         shape_data = self.get_value(self.variable_names[0]).shape[0]
         shape_var = len(self.variable_names)

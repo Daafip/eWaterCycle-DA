@@ -19,3 +19,5 @@ _(forgot to tag this properly so its under the tag v0.0.1)_
 - Restructuring package: now seperate files for classes which user will edit
 #### v0.0.5
 - Adding generate forcing
+#### v0.0.6
+- `ensemble.set_state_vector_variables` now allows use of get and set state vector when not usin DA methods 

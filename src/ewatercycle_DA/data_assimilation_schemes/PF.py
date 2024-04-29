@@ -84,7 +84,6 @@ class ParticleFilter(BaseModel):
         else:
             self.resample = False
 
-        like_sigma = self.hyperparameters['like_sigma_state_vector']
         if self.resample:
             # 1d for now: weights is N x 1: in the case of HBV
             if self.weights[0].size == 1:
@@ -105,6 +104,7 @@ class ParticleFilter(BaseModel):
                     new_state_vectors_transpose[index] = new_state_vectors_transpose[index, indices]
 
 
+            like_sigma = self.hyperparameters['like_sigma_state_vector']
             # for now just constant perturbation, can vary this hyperparameter
             if type(like_sigma) is float:
                 for index, row in enumerate(new_state_vectors_transpose):
@@ -122,7 +122,8 @@ class ParticleFilter(BaseModel):
 
         # is not resampling, also don't update state vector
         else:
-            self.new_state_vectors = self.state_vectors
+            new_state_vectors = self.state_vectors.copy()
+            self.new_state_vectors = new_state_vectors
 
 
     def generate_weights(self):

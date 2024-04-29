@@ -580,9 +580,10 @@ class Ensemble(BaseModel):
         """
         # TODO: Refactor so BMI handles this
         #1
-        if self.ensemble_method_name == "PF":
+        if self.ensemble_method_name == "PF" and self.ensemble_method.resample:
             # in particle filter the whole particle needs to be copied
             # when dealing with lag this is difficult as we don't want it in the regular state vector
+            # only deal with this if resampled
             hbv_model = "HBV" in self.lst_models_name
             hbv_local_model = "HBVLocal" in self.lst_models_name
             if (hbv_model or hbv_local_model) and len(self.lst_models_name) == 1:

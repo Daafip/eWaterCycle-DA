@@ -122,8 +122,7 @@ class ParticleFilter(BaseModel):
 
         # is not resampling, also don't update state vector
         else:
-            new_state_vectors = self.state_vectors.copy()
-            self.new_state_vectors = new_state_vectors
+            self.new_state_vectors = self.state_vectors
 
 
     def generate_weights(self):

@@ -21,3 +21,5 @@ _(forgot to tag this properly so its under the tag v0.0.1)_
 - Adding generate forcing
 #### v0.0.6
 - `ensemble.set_state_vector_variables` now allows use of get and set state vector when not usin DA methods 
+#### v0.0.7
+- changes to PF inmplementation: only resamples if Neff < N * f_n_particles

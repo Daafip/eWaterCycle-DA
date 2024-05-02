@@ -118,7 +118,7 @@ class Ensemble(BaseModel):
     N: int
     dask_config: dict = {"multiprocessing.context": "spawn",
                          'num_workers': psutil.cpu_count(logical=False)}
-    parallel_update = True
+    parallel_update: bool = True
 
     ensemble_list: list = []
     ensemble_method: Any | None = None

@@ -76,27 +76,36 @@ class Ensemble(BaseModel):
         N : Number of ensemble members
 
         dask_config: Dictionary to pass to .. :py:`dask.config.set()`
-                    see `dask docs <https://docs.dask.org/en/stable/scheduler-overview.html>`_
-                    Will default to same number of workers and physical processors.
-                    Use with care, too many workers will overload the infrastructure.
+            see `dask docs <https://docs.dask.org/en/stable/scheduler-overview.html>`_
+            Will default to same number of workers and physical processors.
+            Use with care, too many workers will overload the infrastructure.
+
+        parallel_update: Whether to run the update step in parallel, will default to
+                            True unless local python model which doesn't really benefit
+                            anyway in most cases unless numba is used.
 
     Attributes:
         ensemble_method: method used for data assimilation
 
-        ensemble_method_name: name of method used for data assimilation (needed for function specific)
+        ensemble_method_name: name of method used for data assimilation
+                                (needed for function specific)
 
         ensemble_list : list containing ensembleMembers
 
         observed_variable_name: Name of the observed value: often Q but could be anything
 
-        measurement_operator: Function or list of Functions which maps the state vector to the measurement space:
-            i.e. extracts the wanted value for comparison by the DA scheme from the state vector.   (Also known as H)
+        measurement_operator: Function or list of Functions which maps the state vector
+                            to the measurement space:
+                            i.e. extracts the wanted value for comparison
+                            by the DA scheme from the state vector.
+                            (Also known as H)
 
         observations: NetCDF file containing observations
 
         lst_models_name: list containing a set of all the model names: i.e. to run checks
 
-        logger: list to debug issues, this isn't the best way to debug/log but works for me
+        logger: list to debug issues, this isn't the best way to debug/log
+                but works for me/now
 
         config_specific_storage: used by the config_specific_actions
 
@@ -109,6 +118,7 @@ class Ensemble(BaseModel):
     N: int
     dask_config: dict = {"multiprocessing.context": "spawn",
                          'num_workers': psutil.cpu_count(logical=False)}
+    parallel_update: bool = True
 
     ensemble_list: list = []
     ensemble_method: Any | None = None
@@ -249,6 +259,8 @@ class Ensemble(BaseModel):
                 ensemble_member.forcing = forcing
                 ensemble_member.setup_kwargs = setup_kwargs
                 ensemble_member.loaded_models = self.loaded_models
+                if model_name[-5:].lower() == "local":
+                    self.parallel_update = False
 
         # more flexibility - could change in the future?
         elif type(model_name) == list and len(model_name) == self.N:
@@ -258,6 +270,9 @@ class Ensemble(BaseModel):
                 ensemble_member.forcing = forcing[index_m]
                 ensemble_member.setup_kwargs = setup_kwargs[index_m]
                 ensemble_member.loaded_models = self.loaded_models
+            unique_models = set(model_name)
+            if all(model_i[-5:].lower() == "local" for model_i in unique_models):
+                self.parallel_update = False
         else:
             raise SyntaxWarning(f"model should either string or list of string of length {self.N}")
 
@@ -440,10 +455,13 @@ class Ensemble(BaseModel):
         # as day P & E of 0 correspond with Q of day 0. -
         # # but breaks with other implementations?
 
-        gathered_update = (self.gather(*[self.update_parallel(self, i) for i in range(self.N)]))
+        if self.parallel_update:
+            gathered_update = (self.gather(*[self.update_parallel(self, i) for i in range(self.N)]))
 
-        with dask.config.set(self.dask_config):
-            gathered_update.compute()
+            with dask.config.set(self.dask_config):
+                gathered_update.compute()
+        else:
+            [self.update_linear(self, i) for i in range(self.N)]
 
         if assimilate:
             if not all(model_name in KNOWN_WORKING_MODELS_DA for model_name in self.lst_models_name):
@@ -465,6 +483,11 @@ class Ensemble(BaseModel):
     @staticmethod
     @delayed
     def update_parallel(ensemble, i):
+        ensemble_member = ensemble.ensemble_list[i]
+        ensemble_member.update()
+
+    @staticmethod
+    def update_linear(ensemble, i):
         ensemble_member = ensemble.ensemble_list[i]
         ensemble_member.update()
 

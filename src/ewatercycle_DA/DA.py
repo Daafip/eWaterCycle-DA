@@ -743,13 +743,13 @@ class Ensemble(BaseModel):
                     src[0] should return the state vector for the first value
         """
         if self.parallel:
-            gathered_set_state_vector = (self.gather(*[dask.delayed(self.set_state_vector_parallel)(self,src[i], i) for i in range(self.N)]))
+            gathered_set_state_vector = (self.gather(*[dask.delayed(self.set_state_vector_run)(self,src[i], i) for i in range(self.N)]))
 
             with dask.config.set(self.dask_config):
                 gathered_set_state_vector.compute()
         else:
             for i in range(self.N):
-                self.set_state_vector_parallel(self, src[i], i)
+                self.set_state_vector_run(self, src[i], i)
 
 
     @staticmethod

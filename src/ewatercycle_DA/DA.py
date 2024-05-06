@@ -80,9 +80,16 @@ class Ensemble(BaseModel):
             Will default to same number of workers and physical processors.
             Use with care, too many workers will overload the infrastructure.
 
-        parallel_update: Whether to run the update step in parallel, will default to
-                            True unless local python model which doesn't really benefit
-                            anyway in most cases unless numba is used.
+        parallel: Whether to run  in parallel, will default to `True` unless local
+                  python model which doesn't really benefit from a parallel implementation
+                  in most cases.
+
+        num_worker_init: How many instances initialize at once.
+                        Starting up many docker containers at once can be demanding.
+                        Set to 1 for stability.
+                        This overrides the value set in the`dask_config` on purpose.
+
+
 
     Attributes:
         ensemble_method: method used for data assimilation
@@ -118,7 +125,8 @@ class Ensemble(BaseModel):
     N: int
     dask_config: dict = {"multiprocessing.context": "spawn",
                          'num_workers': psutil.cpu_count(logical=False)}
-    parallel_update: bool = True
+    parallel: bool = True
+    num_worker_init: int = 1
 
     ensemble_list: list = []
     ensemble_method: Any | None = None
@@ -182,24 +190,35 @@ class Ensemble(BaseModel):
                                               forcing_args
                                              )
             This returns 10 different forcing objects in a list which can be passed
-            to ensemble.initialize
+            to `ensemble.initialize`
         """
         self.check_forcing_input(forcing_class, list_forcing_args)
-        if type(forcing_class) == list:
-            gathered_generate_forcing = (self.gather(
-                *[self.generate_forcing_parallel(forcing_class[i],
-                                                  list_forcing_args[i]
-                                                  )
-                                                  for i in range(self.N)]))
-        else:
-            gathered_generate_forcing = (self.gather(
-                *[self.generate_forcing_parallel(forcing_class,
-                                                  list_forcing_args[i]
-                                                  )
-                                                  for i in range(self.N)]))
+        if self.parallel:
+            if type(forcing_class) == list:
+                gathered_generate_forcing = (self.gather(
+                    *[dask.delayed(self.generate_forcing_run)(forcing_class[i],
+                                                      list_forcing_args[i]
+                                                      )
+                                                      for i in range(self.N)]))
+            else:
+                gathered_generate_forcing = (self.gather(
+                    *[dask.delayed(self.generate_forcing_run)(forcing_class,
+                                                      list_forcing_args[i]
+                                                      )
+                                                      for i in range(self.N)]))
 
-        with dask.config.set(self.dask_config):
-            forcing_objs = gathered_generate_forcing.compute()
+            with dask.config.set(self.dask_config):
+                forcing_objs = gathered_generate_forcing.compute()
+        else:
+            forcing_objs = []
+            if type(forcing_class) == list:
+                for i in range(self.N):
+                    forcing_objs.append(self.generate_forcing_run(forcing_class[i],
+                                                                list_forcing_args[i]))
+            else:
+                for i in range(self.N):
+                    forcing_objs.append(self.generate_forcing_run(forcing_class,
+                                                                list_forcing_args[i]))
 
         return forcing_objs
 
@@ -223,8 +242,7 @@ class Ensemble(BaseModel):
                 raise RuntimeError(msg)
 
     @staticmethod
-    @delayed
-    def generate_forcing_parallel(forcing, forcing_args):
+    def generate_forcing_run(forcing, forcing_args):
         """Generate forcing given obj & args (with dask)."""
         forcing_obj = forcing(**forcing_args)
         return forcing_obj
@@ -246,8 +264,6 @@ class Ensemble(BaseModel):
 
             custom_cfg_dir (Bool) by default will create a custom config dir similar to original.
 
-            TODO: make it so custom config dir is emptied afterwards.
-
         Note:
             If you want to pass a list for any one variable, **all** others should be lists too of the same length.
         """
@@ -260,7 +276,7 @@ class Ensemble(BaseModel):
                 ensemble_member.setup_kwargs = setup_kwargs
                 ensemble_member.loaded_models = self.loaded_models
                 if model_name[-5:].lower() == "local":
-                    self.parallel_update = False
+                    self.parallel = False
 
         # more flexibility - could change in the future?
         elif type(model_name) == list and len(model_name) == self.N:
@@ -272,17 +288,21 @@ class Ensemble(BaseModel):
                 ensemble_member.loaded_models = self.loaded_models
             unique_models = set(model_name)
             if all(model_i[-5:].lower() == "local" for model_i in unique_models):
-                self.parallel_update = False
+                self.parallel = False
         else:
             raise SyntaxWarning(f"model should either string or list of string of length {self.N}")
 
-        # setup & initialize - same in both cases - in parallel
-        gathered_initialize = self.gather(*[self.initialize_parallel(self, i, custom_cfg_dir) for i in range(self.N)])
+        if self.parallel:
+            # setup & initialize - same in both cases - in parallel
+            gathered_initialize = self.gather(*[dask.delayed(self.initialize_run)(self, i, custom_cfg_dir) for i in range(self.N)])
 
-        with dask.config.set(self.dask_config):
-            # starting too many dockers at once isn't great for the stability, limit to 1 for now
-            lst_models_name = gathered_initialize.compute(num_workers=1)
-
+            with dask.config.set(self.dask_config):
+                # starting too many dockers at once isn't great for the stability, limit to 1 for now
+                lst_models_name = gathered_initialize.compute(num_workers=self.num_worker_init)
+        else:
+            lst_models_name = []
+            for i in range(self.N):
+                lst_models_name.append(self.initialize_run(self, i, custom_cfg_dir))
         self.lst_models_name = list(set(lst_models_name))
 
     @staticmethod
@@ -291,8 +311,7 @@ class Ensemble(BaseModel):
         return list(args)
 
     @staticmethod
-    @delayed
-    def initialize_parallel(ensemble, i, custom_cfg_dir):
+    def initialize_run(ensemble, i, custom_cfg_dir):
         ensemble_member = ensemble.ensemble_list[i]
         ensemble_member.verify_model_loaded()
         if custom_cfg_dir:
@@ -303,6 +322,7 @@ class Ensemble(BaseModel):
         ensemble_member.setup(cfg_dir=cfg_dir)
         ensemble_member.initialize()
         return ensemble_member.model_name
+
 
     def initialize_da_method(self,
                           ensemble_method_name: str,
@@ -333,12 +353,6 @@ class Ensemble(BaseModel):
 
                 For example giving half the particle filters more variables which vary than others - see what that does.
 
-        Note:
-            The following three are Keyword Args to make the code more flexible: when running the initialize_da_method
-            to set up the ensemble normally *these are all needed*. They are separate as these aren't needed if DA is done
-            on the fly.
-
-        Keyword Args:
             observation_path (Path) = None: Path to a NetCDF file containing observations.
                 Ensure the time dimension is of type :obj:`numpy.datetime64[ns]` in order to work well with
                  .. py:function:: `Ensemble.update`
@@ -348,6 +362,14 @@ class Ensemble(BaseModel):
             measurement_operator (:obj:`function`| :obj:`list[functions]`) = None: if not specified: by default 'all' known parameters,
                 can be a subset of all by passing a list containing strings of variable to include in the state vector.
                 Should you want to vary initial parameters, again all should be a list
+
+        Note:
+            The following three are Keyword Args to make the code more flexible: when running the initialize_da_method
+            to set up the ensemble normally *these are all needed*. They are separate as these aren't needed if DA is done
+            on the fly.
+
+        Keyword Args:
+
 
         Note:
             Assumed memory is large enough to hold observations in memory/lazy open with xarray
@@ -398,18 +420,21 @@ class Ensemble(BaseModel):
                 which vary than others - see what that does.
 
         """
-        gathered_set_state_vect = self.gather(
-            *[self.initialize_da_method_parallel(self, state_vector_variables, i)
-                                                      for i in range(self.N)]
-                                                )
+        if self.parallel:
+            args = [dask.delayed(self.initialize_da_method_run)(self, state_vector_variables, i)
+                                                          for i in range(self.N)]
+            gathered_set_state_vect = self.gather(*args)
 
-        with dask.config.set(self.dask_config):
-            gathered_set_state_vect.compute()
+            with dask.config.set(self.dask_config):
+                gathered_set_state_vect.compute()
+
+        else:
+            for i in range(self.N):
+                self.initialize_da_method_run(self, state_vector_variables, i)
 
 
     @staticmethod
-    @delayed
-    def initialize_da_method_parallel(ensemble, state_vector_variables, i):
+    def initialize_da_method_run(ensemble, state_vector_variables, i):
         ensemble_member = ensemble.ensemble_list[i]
         ensemble_member.state_vector_variables = state_vector_variables
         ensemble_member.set_state_vector_variable()
@@ -423,15 +448,20 @@ class Ensemble(BaseModel):
                 set to false in case you wish to keep.
 
         """
-        gathered_finalize = (self.gather(*[self.finalize_parallel(self, i, remove_config) for i in range(self.N)]))
+        if self.parallel:
+            args = [dask.delayed(self.finalize_run)(self, i, remove_config)
+                                                                 for i in range(self.N)]
+            gathered_finalize = (self.gather(*args))
 
-        with dask.config.set(self.dask_config):
-            gathered_finalize.compute()
+            with dask.config.set(self.dask_config):
+                gathered_finalize.compute()
+        else:
+            for i in range(self.N):
+                self.finalize_run(self, i, remove_config)
 
-    # TODO: think if this is a good idea
+
     @staticmethod
-    @delayed
-    def finalize_parallel(ensemble, i, remove_config):
+    def finalize_run(ensemble, i, remove_config):
         ensemble_member = ensemble.ensemble_list[i]
         ensemble_member.finalize(remove_config)
 
@@ -455,13 +485,13 @@ class Ensemble(BaseModel):
         # as day P & E of 0 correspond with Q of day 0. -
         # # but breaks with other implementations?
 
-        if self.parallel_update:
-            gathered_update = (self.gather(*[self.update_parallel(self, i) for i in range(self.N)]))
+        if self.parallel:
+            gathered_update = (self.gather(*[dask.delayed(self.update_run)(self, i) for i in range(self.N)]))
 
             with dask.config.set(self.dask_config):
                 gathered_update.compute()
         else:
-            [self.update_linear(self, i) for i in range(self.N)]
+            [self.update_run(self, i) for i in range(self.N)]
 
         if assimilate:
             if not all(model_name in KNOWN_WORKING_MODELS_DA for model_name in self.lst_models_name):
@@ -481,13 +511,7 @@ class Ensemble(BaseModel):
 
 
     @staticmethod
-    @delayed
-    def update_parallel(ensemble, i):
-        ensemble_member = ensemble.ensemble_list[i]
-        ensemble_member.update()
-
-    @staticmethod
-    def update_linear(ensemble, i):
+    def update_run(ensemble, i):
         ensemble_member = ensemble.ensemble_list[i]
         ensemble_member.update()
 
@@ -573,7 +597,7 @@ class Ensemble(BaseModel):
         """if only one model is loaded & hydrological: sets negative numbers to positive
            Other models such as the lorenz model can be negative"""
         # in future may be interesting to load multiple types of hydrological models in one ensemble
-        # for not not implemented
+        # for now not implemented
         if len(self.lst_models_name) == 1 and self.lst_models_name[0] in KNOWN_WORKING_MODELS_DA_HYDROLOGY:
                 # set any values below 0 to small
                 self.ensemble_method.new_state_vectors[self.ensemble_method.new_state_vectors < 0] = 1e-6
@@ -597,7 +621,7 @@ class Ensemble(BaseModel):
 
                 if HBV and other models are implemented, this will present a RuntimeWarning.
 
-                If other models are implemented with PF, nothing should happen, just a UserWarning so you're aware.
+                If other models are implemented with PF, nothing should happen, just a UserWarning so that you're aware.
 
 
         """
@@ -648,19 +672,22 @@ class Ensemble(BaseModel):
         output_array = np.zeros((self.N, shape_data))
 
         self.logger.append(f'{output_array.shape}')
+        if self.parallel:
+            gathered_get_value = (self.gather(*[dask.delayed(self.get_value_parallel)(self,var_name, i) for i in range(self.N)]))
 
-        gathered_get_value = (self.gather(*[self.get_value_parallel(self,var_name, i) for i in range(self.N)]))
-
-        with dask.config.set(self.dask_config):
-            get_value_lst = gathered_get_value.compute()
+            with dask.config.set(self.dask_config):
+                get_value_lst = gathered_get_value.compute()
+        else:
+            get_value_lst = []
+            for i in range(self.N):
+                get_value_lst.append(self.get_value_parallel(self, var_name, i))
 
         output_array = np.vstack(get_value_lst)
         self.logger.append(f'{output_array.shape}')
         return output_array
 
     @staticmethod
-    @delayed
-    def get_value_parallel(ensemble, var_name, i):
+    def get_value_run(ensemble, var_name, i):
         ensemble_member = ensemble.ensemble_list[i]
         return ensemble_member.model.get_value(var_name)
 
@@ -669,16 +696,22 @@ class Ensemble(BaseModel):
             Note:
                 Assumes 1d array? although :obj:`np.vstack` does work for 2d arrays
         """
-        gathered_get_state_vector = (self.gather(*[self.get_state_vector_parallel(self, i) for i in range(self.N)]))
+        if self.parallel:
+            gathered_get_state_vector = (self.gather(*[dask.delayed(self.get_state_vector_run)(self, i) for i in range(self.N)]))
 
-        with dask.config.set(self.dask_config):
-            output_lst = gathered_get_state_vector.compute()
+            with dask.config.set(self.dask_config):
+                output_lst = gathered_get_state_vector.compute()
+        else:
+            output_lst = []
+            for i in range(self.N):
+                output_lst.append(self.get_state_vector_run(self, i))
 
         return np.vstack(output_lst) # N x len(z)
 
+
+
     @staticmethod
-    @delayed
-    def get_state_vector_parallel(ensemble, i):
+    def get_state_vector_run(ensemble, i):
         ensemble_member = ensemble.ensemble_list[i]
         return ensemble_member.get_state_vector()
 
@@ -687,14 +720,18 @@ class Ensemble(BaseModel):
             args:
                 src (np.ndarray): size = number of ensemble members x 1 [N x 1]
         """
-        gathered_set_value = (self.gather(*[self.set_value_parallel(self, var_name, src[i], i) for i in range(self.N)]))
+        if self.parallel:
+            gathered_set_value = (self.gather(*[dask.delayed(self.set_value_run)(self, var_name, src[i], i) for i in range(self.N)]))
 
-        with dask.config.set(self.dask_config):
-            gathered_set_value.compute()
+            with dask.config.set(self.dask_config):
+                gathered_set_value.compute()
+        else:
+            for i in range(self.N):
+                self.set_value_run(self, var_name, src[i], i)
+
 
     @staticmethod
-    @delayed
-    def set_value_parallel(ensemble, var_name, src_i, i):
+    def set_value_run(ensemble, var_name, src_i, i):
         ensemble_member = ensemble.ensemble_list[i]
         return ensemble_member.model.set_value(var_name,src_i)
 
@@ -705,15 +742,18 @@ class Ensemble(BaseModel):
                 src (np.ndarray): size = number of ensemble members x number of states in state vector [N x len(z)]
                     src[0] should return the state vector for the first value
         """
-        gathered_set_state_vector = (self.gather(*[self.set_state_vector_parallel(self,src[i], i) for i in range(self.N)]))
+        if self.parallel:
+            gathered_set_state_vector = (self.gather(*[dask.delayed(self.set_state_vector_parallel)(self,src[i], i) for i in range(self.N)]))
 
-        with dask.config.set(self.dask_config):
-            gathered_set_state_vector.compute()
+            with dask.config.set(self.dask_config):
+                gathered_set_state_vector.compute()
+        else:
+            for i in range(self.N):
+                self.set_state_vector_parallel(self, src[i], i)
 
 
     @staticmethod
-    @delayed
-    def set_state_vector_parallel(ensemble, src_i, i):
+    def set_state_vector_run(ensemble, src_i, i):
         ensemble_member = ensemble.ensemble_list[i]
         return ensemble_member.set_state_vector(src_i)
 
@@ -811,7 +851,7 @@ class EnsembleMember(BaseModel):
                                      + "Please pass a list of variable or submit PR.")
                 # also change the documentation initialize_da_method
 
-        # TODO more elegant type checking availible
+        # TODO more elegant type checking available
         elif type(self.state_vector_variables) == list and type(self.state_vector_variables[0]) == str:
             self.variable_names = self.state_vector_variables
 

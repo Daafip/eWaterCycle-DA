@@ -25,3 +25,5 @@ _(forgot to tag this properly so its under the tag v0.0.1)_
 - changes to PF inmplementation: only resamples if Neff < N * f_n_particles
 #### v0.0.8
 - Added update linear for local models: some issues with dask and long runs
+#### v0.0.9
+- Expanded start in v0.0.8: Running in parallel is now an option. Default to linear only for local models but can be changed by user.

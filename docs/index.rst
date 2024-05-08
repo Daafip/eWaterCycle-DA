@@ -32,9 +32,9 @@ The added benefit of this model structure is that the package can also be used f
    :maxdepth: 2
    :caption: Contents:
              
-   example_HBV_model_PF_1
-   example_HBV_model_PF_2
-   example_HBV_model_EnKF
-   example_Marrmot_Ensemble
-   user_guide_DA_scheme
+   examples/example_HBV_model_PF_1
+   examples/example_HBV_model_PF_2
+   examples/example_HBV_model_EnKF
+   examples/example_Marrmot_Ensemble
+   examples/user_guide_DA_scheme
 
